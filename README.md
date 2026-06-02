@@ -1,6 +1,6 @@
-# 异环 · 海特洛市探索地图
+# MaaNTE 在线地图工具
 
-基于 Vue 3、Leaflet 和 Vite 的本地交互式地图。地图瓦片由游戏文件解包后的高清底图生成，不依赖在线地图服务。
+基于 Vue 3、Leaflet 和 Vite 的本地交互式地图。
 
 ## 启动
 
@@ -9,11 +9,7 @@ npm install
 npm run dev
 ```
 
-开发服务器默认运行在 `http://127.0.0.1:5173`。当前机器如果遇到全局 `npm` 入口损坏，也可以使用：
-
-```powershell
-.\scripts\start-dev.ps1
-```
+开发服务器默认运行在 `http://127.0.0.1:5173`
 
 ## 本地数据
 
@@ -28,12 +24,6 @@ npm run dev
 
 ```powershell
 npm run clean:locations
-```
-
-如需转换旧版 `locations.generated.js`，显式指定输入文件：
-
-```powershell
-python .\scripts\clean-locations.py --input .\legacy\locations.generated.js
 ```
 
 ## 编辑地图
@@ -60,9 +50,6 @@ python .\scripts\clean-locations.py --input .\legacy\locations.generated.js
 - `src/data/map-data.json`：可编辑的地图数据快照。
 - `src/data/locations.js`：地图坐标转换。
 - `vite.config.js`：Vite 配置，以及仅在开发服务器中启用的本地写入接口。
-- `scripts/clean-locations.py`：清洗本地数据或转换旧版快照。
-- `scripts/generate-map-tiles.ps1`：从原始底图生成本地瓦片。
-- `scripts/qa-map.mjs`：浏览器端基础回归检查。
 
 ### 分类字段
 
@@ -94,20 +81,6 @@ python .\scripts\clean-locations.py --input .\legacy\locations.generated.js
 2. 运行 `npm run dev`，在浏览器中检查交互和编辑写入。
 3. 修改分类或点位后，按需运行 `npm run clean:locations` 统一数据格式。
 4. 提交前运行 `npm run build` 和 `npm run qa`。
-
-## 重新生成地图瓦片
-
-默认读取 `C:\Users\owo\Desktop\navi_dev\bigworldmap.png`：
-
-```powershell
-.\scripts\generate-map-tiles.ps1
-```
-
-也可以显式指定其他原图：
-
-```powershell
-.\scripts\generate-map-tiles.ps1 -Source "D:\maps\bigworldmap.png"
-```
 
 ## 坐标与扩图
 
