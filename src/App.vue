@@ -7,6 +7,7 @@ import {
   MAP_HEIGHT,
   MAP_WIDTH,
   TILE_SIZE,
+  mapPixelToMapLatLng,
   mapLatLngToWorld,
   worldToMapLatLng,
 } from './data/locations'
@@ -25,6 +26,9 @@ const locationLookup = computed(() => Object.fromEntries(locations.value.map((lo
 const bounds = L.latLngBounds([-MAP_HEIGHT, 0], [0, MAP_WIDTH])
 const INITIAL_ZOOM = -3
 const MIN_ZOOM = -3
+const MARKER_FILTERS_STORAGE_KEY = 'nte-marker-filters'
+const NAVIGATION_WEBSOCKET_URL = import.meta.env.VITE_MAANTE_NAVI_WEBSOCKET_URL || 'ws://127.0.0.1:8765'
+const NAVIGATION_RECONNECT_DELAY = 2000
 
 function readStoredIds(key) {
   try {
@@ -76,6 +80,17 @@ const collapsedCategoryGroups = ref({
   传送点: false,
   怪物: true,
 })
+const navigationConnection = ref('disconnected')
+const navigationState = ref({
+  position: null,
+  angle: null,
+  angleConfidence: 0,
+})
+const navigationConnectionLabel = computed(() => ({
+  connected: 'CONNECTED',
+  connecting: 'CONNECTING',
+  disconnected: 'OFFLINE',
+})[navigationConnection.value])
 
 const emptyLocationForm = () => ({
   name: '',
@@ -99,6 +114,11 @@ const editorCategoryGroups = computed(() => [...new Set(editorCategories.value.m
 let map
 let markerLayer
 let arrowLayer
+let navigationMarker
+let navigationSocket
+let navigationReconnectTimer
+let navigationClientStopped = false
+let navigationDisplayAngle = null
 const markerLookup = new Map()
 
 const activeRoute = computed(() => routes.value.find((route) => route.id === activeRouteId.value) || null)
@@ -158,6 +178,39 @@ const teleportCategoryIds = computed(() =>
   visibleCategories.value.filter((category) => category.group === '传送点').map((category) => category.id),
 )
 const collapsibleGroupLabels = new Set(['探索度', '传送点', '怪物'])
+
+function restoreMarkerFilters() {
+  let storedFilters
+  try {
+    storedFilters = JSON.parse(localStorage.getItem(MARKER_FILTERS_STORAGE_KEY) || 'null')
+  } catch {
+    storedFilters = null
+  }
+
+  if (!storedFilters || !Array.isArray(storedFilters.activeCategories)) {
+    activeCategories.value = getInitialCategories()
+    return
+  }
+
+  const validCategoryIds = new Set(visibleCategories.value.map((category) => category.id))
+  const nextCategories = new Set(storedFilters.activeCategories.filter((id) => validCategoryIds.has(id)))
+  keepTeleportEnabled.value = typeof storedFilters.keepTeleportEnabled === 'boolean'
+    ? storedFilters.keepTeleportEnabled
+    : true
+  showIncompleteOnly.value = storedFilters.showIncompleteOnly === true
+  if (keepTeleportEnabled.value) {
+    teleportCategoryIds.value.forEach((id) => nextCategories.add(id))
+  }
+  activeCategories.value = nextCategories
+}
+
+function persistMarkerFilters() {
+  localStorage.setItem(MARKER_FILTERS_STORAGE_KEY, JSON.stringify({
+    activeCategories: [...activeCategories.value],
+    keepTeleportEnabled: keepTeleportEnabled.value,
+    showIncompleteOnly: showIncompleteOnly.value,
+  }))
+}
 
 function showStatus(message) {
   statusMessage.value = message
@@ -297,6 +350,102 @@ function renderRouteArrows() {
   }
   const colors = ['#ffd27d', '#8adfd6', '#e8a6ff', '#ff8a70', '#87a9ff']
   activeRoute.value?.segments.forEach((segment, index) => drawMarkerPath(segment.markerIds, colors[index % colors.length]))
+}
+
+function createNavigationIcon() {
+  return L.divIcon({
+    className: 'navigation-arrow-shell',
+    html: `<div class="navigation-arrow"><img src="${publicAssetUrl('/images/map_webview_pointer.png')}" alt=""></div>`,
+    iconSize: [30, 35],
+    iconAnchor: [15, 18],
+  })
+}
+
+function updateNavigationMarkerAngle(angle) {
+  if (!Number.isFinite(angle)) return
+  if (navigationDisplayAngle === null) {
+    navigationDisplayAngle = angle
+  } else {
+    const delta = ((angle - navigationDisplayAngle + 540) % 360) - 180
+    navigationDisplayAngle += delta
+  }
+  const image = navigationMarker?.getElement()?.querySelector('.navigation-arrow img')
+  if (image) image.style.transform = `rotate(${navigationDisplayAngle}deg)`
+}
+
+function renderNavigationArrow() {
+  if (!map || !navigationState.value.position) {
+    navigationMarker?.setOpacity(0)
+    return
+  }
+  if (!navigationMarker) {
+    navigationMarker = L.marker(mapPixelToMapLatLng(navigationState.value.position), {
+      icon: createNavigationIcon(),
+      interactive: false,
+      keyboard: false,
+      zIndexOffset: 1000000,
+    }).addTo(map)
+  }
+  navigationMarker.setLatLng(mapPixelToMapLatLng(navigationState.value.position))
+  navigationMarker.setOpacity(1)
+  const arrow = navigationMarker.getElement()?.querySelector('.navigation-arrow')
+  if (arrow) {
+    arrow.classList.toggle('navigation-arrow--angle-missing', navigationState.value.angle === null)
+  }
+  updateNavigationMarkerAngle(navigationState.value.angle)
+}
+
+function handleNavigationMessage(event) {
+  try {
+    const payload = JSON.parse(event.data)
+    if (payload.type !== 'maan-nav-state' || payload.version !== 1) return
+    const pixelX = Number(payload.position?.pixelX)
+    const pixelY = Number(payload.position?.pixelY)
+    const sourceWidth = Number(payload.position?.sourceWidth)
+    const sourceHeight = Number(payload.position?.sourceHeight)
+    const angle = Number(payload.angle)
+    navigationState.value = {
+      position: Number.isFinite(pixelX) && Number.isFinite(pixelY)
+        ? {
+            pixelX,
+            pixelY,
+            sourceWidth: Number.isFinite(sourceWidth) && sourceWidth > 0 ? sourceWidth : MAP_WIDTH,
+            sourceHeight: Number.isFinite(sourceHeight) && sourceHeight > 0 ? sourceHeight : MAP_HEIGHT,
+          }
+        : null,
+      angle: payload.angle !== null && Number.isFinite(angle) ? angle : null,
+      angleConfidence: Number(payload.angleConfidence) || 0,
+    }
+    renderNavigationArrow()
+  } catch {
+    // Ignore malformed messages and continue consuming the local stream.
+  }
+}
+
+function scheduleNavigationReconnect() {
+  if (navigationClientStopped || navigationReconnectTimer) return
+  navigationReconnectTimer = window.setTimeout(() => {
+    navigationReconnectTimer = null
+    connectNavigationSocket()
+  }, NAVIGATION_RECONNECT_DELAY)
+}
+
+function connectNavigationSocket() {
+  if (navigationClientStopped || navigationSocket) return
+  navigationConnection.value = 'connecting'
+  const socket = new WebSocket(NAVIGATION_WEBSOCKET_URL)
+  navigationSocket = socket
+  socket.addEventListener('open', () => {
+    if (navigationSocket === socket) navigationConnection.value = 'connected'
+  })
+  socket.addEventListener('message', handleNavigationMessage)
+  socket.addEventListener('close', () => {
+    if (navigationSocket !== socket) return
+    navigationSocket = null
+    navigationConnection.value = 'disconnected'
+    scheduleNavigationReconnect()
+  })
+  socket.addEventListener('error', () => socket.close())
 }
 
 function focusSegment(segment) {
@@ -619,10 +768,11 @@ watch(activeDistricts, async () => {
   fitLocationsBounds(focusLocations.length ? focusLocations : filteredLocations.value)
 }, { deep: true })
 watch(activeRouteId, () => nextTick(renderRouteArrows))
+watch([() => [...activeCategories.value], keepTeleportEnabled, showIncompleteOnly], persistMarkerFilters)
 
 onMounted(async () => {
   await loadLatestMapData()
-  activeCategories.value = getInitialCategories()
+  restoreMarkerFilters()
   map = L.map(mapElement.value, {
     crs: L.CRS.Simple,
     minZoom: MIN_ZOOM,
@@ -658,10 +808,15 @@ onMounted(async () => {
   mapElement.value.dataset.minZoom = String(map.getMinZoom())
   mapElement.value.dataset.initialZoom = String(map.getZoom())
   renderMarkers()
+  connectNavigationSocket()
   window.addEventListener('keydown', handleKeydown)
 })
 
 onUnmounted(() => {
+  navigationClientStopped = true
+  if (navigationReconnectTimer) window.clearTimeout(navigationReconnectTimer)
+  navigationSocket?.close()
+  navigationMarker?.remove()
   window.removeEventListener('keydown', handleKeydown)
   map?.remove()
 })
@@ -675,7 +830,7 @@ onUnmounted(() => {
       <div class="brand-block topbar-brand">
         <img class="brand-mark" :src="publicAssetUrl('/logo.png')" alt="MaaNTE" />
         <div>
-          <p class="eyebrow">MAANTE MAP DATABASE</p>
+          <p class="eyebrow">MaaNTE Map</p>
           <h1>MaaNTE在线地图工具</h1>
         </div>
       </div>
@@ -872,6 +1027,9 @@ onUnmounted(() => {
     <div class="map-hud glass-panel">
       <button type="button" @click="resetView">重置视野</button>
       <span>LAT {{ coordinates.lat.toFixed(2) }}</span><span>LNG {{ coordinates.lng.toFixed(2) }}</span>
+      <span class="navigation-status" :class="`navigation-status--${navigationConnection}`">NAVI {{ navigationConnectionLabel }}</span>
+      <span v-if="navigationState.position">POS {{ navigationState.position.pixelX.toFixed(0) }}, {{ navigationState.position.pixelY.toFixed(0) }}</span>
+      <span v-if="navigationState.angle !== null">ANGLE {{ navigationState.angle.toFixed(1) }}°</span>
     </div>
     <div v-if="editorMode" class="editor-tip glass-panel">编辑模式：点击地图空白处添加点位</div>
     <div v-if="statusMessage" class="status-toast glass-panel">{{ statusMessage }}</div>
