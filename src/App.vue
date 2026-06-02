@@ -25,6 +25,7 @@ const locationLookup = computed(() => Object.fromEntries(locations.value.map((lo
 const bounds = L.latLngBounds([-MAP_HEIGHT, 0], [0, MAP_WIDTH])
 const INITIAL_ZOOM = -3
 const MIN_ZOOM = -3
+const MARKER_FILTERS_STORAGE_KEY = 'nte-marker-filters'
 
 function readStoredIds(key) {
   try {
@@ -126,6 +127,39 @@ const groupedCategories = computed(() => {
 const teleportCategoryIds = computed(() =>
   visibleCategories.value.filter((category) => category.group === '传送点').map((category) => category.id),
 )
+
+function restoreMarkerFilters() {
+  let storedFilters
+  try {
+    storedFilters = JSON.parse(localStorage.getItem(MARKER_FILTERS_STORAGE_KEY) || 'null')
+  } catch {
+    storedFilters = null
+  }
+
+  if (!storedFilters || !Array.isArray(storedFilters.activeCategories)) {
+    activeCategories.value = getInitialCategories()
+    return
+  }
+
+  const validCategoryIds = new Set(visibleCategories.value.map((category) => category.id))
+  const nextCategories = new Set(storedFilters.activeCategories.filter((id) => validCategoryIds.has(id)))
+  keepTeleportEnabled.value = typeof storedFilters.keepTeleportEnabled === 'boolean'
+    ? storedFilters.keepTeleportEnabled
+    : true
+  showIncompleteOnly.value = storedFilters.showIncompleteOnly === true
+  if (keepTeleportEnabled.value) {
+    teleportCategoryIds.value.forEach((id) => nextCategories.add(id))
+  }
+  activeCategories.value = nextCategories
+}
+
+function persistMarkerFilters() {
+  localStorage.setItem(MARKER_FILTERS_STORAGE_KEY, JSON.stringify({
+    activeCategories: [...activeCategories.value],
+    keepTeleportEnabled: keepTeleportEnabled.value,
+    showIncompleteOnly: showIncompleteOnly.value,
+  }))
+}
 
 function showStatus(message) {
   statusMessage.value = message
@@ -503,10 +537,11 @@ watch(filteredLocations, (visibleLocations) => {
   }
 })
 watch(activeRouteId, () => nextTick(renderRouteArrows))
+watch([() => [...activeCategories.value], keepTeleportEnabled, showIncompleteOnly], persistMarkerFilters)
 
 onMounted(async () => {
   await loadLatestMapData()
-  activeCategories.value = getInitialCategories()
+  restoreMarkerFilters()
   map = L.map(mapElement.value, {
     crs: L.CRS.Simple,
     minZoom: MIN_ZOOM,
