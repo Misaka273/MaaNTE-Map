@@ -202,6 +202,16 @@ function restoreMarkerFilters() {
     teleportCategoryIds.value.forEach((id) => nextCategories.add(id))
   }
   activeCategories.value = nextCategories
+
+  const storedCollapsedGroups = storedFilters.collapsedCategoryGroups
+  if (storedCollapsedGroups && typeof storedCollapsedGroups === 'object') {
+    collapsedCategoryGroups.value = {
+      ...collapsedCategoryGroups.value,
+      ...Object.fromEntries(
+        [...collapsibleGroupLabels].map((label) => [label, Boolean(storedCollapsedGroups[label])]),
+      ),
+    }
+  }
 }
 
 function persistMarkerFilters() {
@@ -209,6 +219,9 @@ function persistMarkerFilters() {
     activeCategories: [...activeCategories.value],
     keepTeleportEnabled: keepTeleportEnabled.value,
     showIncompleteOnly: showIncompleteOnly.value,
+    collapsedCategoryGroups: Object.fromEntries(
+      [...collapsibleGroupLabels].map((label) => [label, Boolean(collapsedCategoryGroups.value[label])]),
+    ),
   }))
 }
 
@@ -769,6 +782,7 @@ watch(activeDistricts, async () => {
 }, { deep: true })
 watch(activeRouteId, () => nextTick(renderRouteArrows))
 watch([() => [...activeCategories.value], keepTeleportEnabled, showIncompleteOnly], persistMarkerFilters)
+watch(collapsedCategoryGroups, persistMarkerFilters, { deep: true })
 
 onMounted(async () => {
   await loadLatestMapData()
