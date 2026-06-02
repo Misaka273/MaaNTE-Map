@@ -344,7 +344,7 @@ async function persistMapData() {
     if (!response.ok) throw new Error('保存失败')
     showStatus('本地数据已保存')
   } catch {
-    showStatus('当前环境不可写，请在本地开发服务器中编辑')
+    // Static deployments keep route edits in localStorage and can export them as JSON.
   }
 }
 
@@ -511,7 +511,7 @@ function exportRoutes() {
   const blobUrl = URL.createObjectURL(new Blob([`${JSON.stringify(payload, null, 2)}\n`], { type: 'application/json' }))
   const link = document.createElement('a')
   link.href = blobUrl
-  link.download = `maan-te-routes-${new Date().toISOString().slice(0, 10)}.json`
+  link.download = `MaaNTE-routes-${new Date().toISOString().slice(0, 10)}.json`
   link.click()
   URL.revokeObjectURL(blobUrl)
   showStatus('路线 JSON 已导出')
