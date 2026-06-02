@@ -714,7 +714,7 @@ onUnmounted(() => {
       <div class="brand-block">
         <img class="brand-mark" :src="publicAssetUrl('/logo.png')" alt="MaaNTE" />
         <div>
-          <p class="eyebrow">MAANTE MAP DATABASE</p>
+          <p class="eyebrow">MaaNTE Map</p>
           <h1>MaaNTE在线地图工具</h1>
         </div>
       </div>
