@@ -54,7 +54,7 @@
       "icon": "✦",
       "color": "#ffd27d",
       "isDefault": false,
-      "isHidden": true
+      "isHidden": false
     },
     {
       "id": "street-justice",
