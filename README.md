@@ -118,7 +118,7 @@ npm run qa
 
 ```json
 {
-  "type": "maan-nav-state",
+  "type": "navi-state",
   "version": 1,
   "position": {
     "pixelX": 5788,
