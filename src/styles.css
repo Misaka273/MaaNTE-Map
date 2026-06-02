@@ -599,7 +599,10 @@ kbd {
 .category-list {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 7px;
+  grid-auto-rows: max-content;
+  align-content: start;
+  align-items: start;
+  gap: 0;
   margin: 16px 0;
   max-height: 268px;
   overflow-y: auto;
@@ -628,6 +631,14 @@ kbd {
 .category-group-block {
   display: grid;
   gap: 8px;
+  margin-top: 7px;
+  align-self: start;
+}
+
+.category-group-block--collapsed {
+  max-height: none;
+  overflow: visible;
+  margin-top: 7px;
 }
 
 .category-group-toggle {
@@ -1535,9 +1546,6 @@ kbd {
     display: none;
   }
 
-  .category-group-items {
-    grid-template-columns: 1fr;
-  }
 }
 
 /* Keep interface chrome monochrome; marker accents remain category-specific. */
