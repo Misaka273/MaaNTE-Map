@@ -29,6 +29,11 @@ const MIN_ZOOM = -3
 const MARKER_FILTERS_STORAGE_KEY = 'nte-marker-filters'
 const NAVIGATION_WEBSOCKET_URL = import.meta.env.VITE_MAANTE_NAVI_WEBSOCKET_URL || 'ws://127.0.0.1:8765'
 const NAVIGATION_RECONNECT_DELAY = 2000
+const DEFAULT_COLLAPSED_CATEGORY_GROUPS = {
+  探索度: false,
+  传送点: false,
+  怪物: true,
+}
 
 function readStoredIds(key) {
   try {
@@ -36,6 +41,27 @@ function readStoredIds(key) {
   } catch {
     return new Set()
   }
+}
+
+function readStoredMarkerFilters() {
+  try {
+    return JSON.parse(localStorage.getItem(MARKER_FILTERS_STORAGE_KEY) || 'null')
+  } catch {
+    return null
+  }
+}
+
+function readStoredMapView() {
+  const storedFilters = readStoredMarkerFilters()
+  const mapView = storedFilters?.mapView
+  if (!mapView || typeof mapView !== 'object') return null
+
+  const lat = Number(mapView.lat)
+  const lng = Number(mapView.lng)
+  const zoom = Number(mapView.zoom)
+
+  if (![lat, lng, zoom].every(Number.isFinite)) return null
+  return { lat, lng, zoom }
 }
 
 function getInitialCategories() {
@@ -55,16 +81,43 @@ function normalizeDistrictLabel(value) {
 const mapElement = ref(null)
 const searchInput = ref(null)
 const query = ref('')
-const activeCategories = ref(getInitialCategories())
-const activeDistricts = ref(new Set())
-const keepTeleportEnabled = ref(true)
+const storedMarkerFilters = readStoredMarkerFilters()
+const initialCategoryIds = new Set(visibleCategories.value.map((category) => category.id))
+const initialTeleportCategoryIds = new Set(
+  visibleCategories.value
+    .filter((category) => category.group === '传送点')
+    .map((category) => category.id),
+)
+const initialKeepTeleportEnabled = typeof storedMarkerFilters?.keepTeleportEnabled === 'boolean'
+  ? storedMarkerFilters.keepTeleportEnabled
+  : true
+const initialActiveCategories = (() => {
+  if (!Array.isArray(storedMarkerFilters?.activeCategories)) return initialCategoryIds
+  const nextCategories = new Set(storedMarkerFilters.activeCategories.filter((id) => initialCategoryIds.has(id)))
+  if (initialKeepTeleportEnabled) {
+    initialTeleportCategoryIds.forEach((id) => nextCategories.add(id))
+  }
+  return nextCategories
+})()
+const initialActiveDistricts = new Set(
+  Array.isArray(storedMarkerFilters?.activeDistricts)
+    ? storedMarkerFilters.activeDistricts.map((district) => normalizeDistrictLabel(district)).filter(Boolean)
+    : [],
+)
+const initialCollapsedCategoryGroups = {
+  ...DEFAULT_COLLAPSED_CATEGORY_GROUPS,
+  ...(storedMarkerFilters?.collapsedCategoryGroups || {}),
+}
+const activeCategories = ref(initialActiveCategories)
+const activeDistricts = ref(initialActiveDistricts)
+const keepTeleportEnabled = ref(initialKeepTeleportEnabled)
 const selectedLocation = ref(null)
 const completedIds = ref(readStoredIds('nte-completed'))
 const favoriteIds = ref(readStoredIds('nte-favorites'))
-const showIncompleteOnly = ref(false)
+const showIncompleteOnly = ref(storedMarkerFilters?.showIncompleteOnly === true)
 const coordinates = ref({ lat: 0, lng: 0 })
 const sidebarCollapsed = ref(false)
-const districtFilterOpen = ref(false)
+const districtFilterOpen = ref(storedMarkerFilters?.districtFilterOpen === true)
 const clearCompletedConfirming = ref(false)
 const editorMode = ref(false)
 const editorFormOpen = ref(false)
@@ -75,11 +128,7 @@ const routePanelOpen = ref(false)
 const activeRouteId = ref(null)
 const isAddingSegment = ref(false)
 const segmentMarkerIds = ref([])
-const collapsedCategoryGroups = ref({
-  探索度: false,
-  传送点: false,
-  怪物: true,
-})
+const collapsedCategoryGroups = ref(initialCollapsedCategoryGroups)
 const navigationConnection = ref('disconnected')
 const navigationState = ref({
   position: null,
@@ -119,6 +168,9 @@ let navigationSocket
 let navigationReconnectTimer
 let navigationClientStopped = false
 let navigationDisplayAngle = null
+let districtAutoFitReady = false
+let mapViewPersistenceReady = false
+let skipNextDistrictAutoFit = false
 const markerLookup = new Map()
 
 const activeRoute = computed(() => routes.value.find((route) => route.id === activeRouteId.value) || null)
@@ -180,48 +232,72 @@ const teleportCategoryIds = computed(() =>
 const collapsibleGroupLabels = new Set(['探索度', '传送点', '怪物'])
 
 function restoreMarkerFilters() {
-  let storedFilters
-  try {
-    storedFilters = JSON.parse(localStorage.getItem(MARKER_FILTERS_STORAGE_KEY) || 'null')
-  } catch {
-    storedFilters = null
-  }
-
-  if (!storedFilters || !Array.isArray(storedFilters.activeCategories)) {
-    activeCategories.value = getInitialCategories()
-    return
-  }
-
+  const storedFilters = readStoredMarkerFilters()
   const validCategoryIds = new Set(visibleCategories.value.map((category) => category.id))
-  const nextCategories = new Set(storedFilters.activeCategories.filter((id) => validCategoryIds.has(id)))
-  keepTeleportEnabled.value = typeof storedFilters.keepTeleportEnabled === 'boolean'
+
+  keepTeleportEnabled.value = typeof storedFilters?.keepTeleportEnabled === 'boolean'
     ? storedFilters.keepTeleportEnabled
     : true
-  showIncompleteOnly.value = storedFilters.showIncompleteOnly === true
-  if (keepTeleportEnabled.value) {
-    teleportCategoryIds.value.forEach((id) => nextCategories.add(id))
-  }
-  activeCategories.value = nextCategories
+  showIncompleteOnly.value = storedFilters?.showIncompleteOnly === true
 
-  const storedCollapsedGroups = storedFilters.collapsedCategoryGroups
-  if (storedCollapsedGroups && typeof storedCollapsedGroups === 'object') {
-    collapsedCategoryGroups.value = {
-      ...collapsedCategoryGroups.value,
-      ...Object.fromEntries(
-        [...collapsibleGroupLabels].map((label) => [label, Boolean(storedCollapsedGroups[label])]),
-      ),
+  if (Array.isArray(storedFilters?.activeCategories)) {
+    const nextCategories = new Set(storedFilters.activeCategories.filter((id) => validCategoryIds.has(id)))
+    if (keepTeleportEnabled.value) {
+      teleportCategoryIds.value.forEach((id) => nextCategories.add(id))
     }
+    activeCategories.value = nextCategories
+  } else {
+    activeCategories.value = getInitialCategories()
   }
+
+  skipNextDistrictAutoFit = Array.isArray(storedFilters?.activeDistricts)
+  activeDistricts.value = new Set(
+    Array.isArray(storedFilters?.activeDistricts)
+      ? storedFilters.activeDistricts.map((district) => normalizeDistrictLabel(district)).filter(Boolean)
+      : [],
+  )
+
+  const storedCollapsedGroups = storedFilters?.collapsedCategoryGroups
+  collapsedCategoryGroups.value = {
+    ...DEFAULT_COLLAPSED_CATEGORY_GROUPS,
+    ...(storedCollapsedGroups && typeof storedCollapsedGroups === 'object'
+      ? Object.fromEntries(
+          [...collapsibleGroupLabels].map((label) => [label, Boolean(storedCollapsedGroups[label])]),
+        )
+      : {}),
+  }
+
+  districtFilterOpen.value = storedFilters?.districtFilterOpen === true
 }
 
 function persistMarkerFilters() {
+  const storedFilters = readStoredMarkerFilters()
   localStorage.setItem(MARKER_FILTERS_STORAGE_KEY, JSON.stringify({
+    ...(storedFilters && typeof storedFilters === 'object' ? storedFilters : {}),
     activeCategories: [...activeCategories.value],
+    activeDistricts: [...activeDistricts.value],
     keepTeleportEnabled: keepTeleportEnabled.value,
     showIncompleteOnly: showIncompleteOnly.value,
+    districtFilterOpen: districtFilterOpen.value,
     collapsedCategoryGroups: Object.fromEntries(
       [...collapsibleGroupLabels].map((label) => [label, Boolean(collapsedCategoryGroups.value[label])]),
     ),
+  }))
+}
+
+function persistMapView() {
+  if (!map || !mapViewPersistenceReady) return
+
+  const center = map.getCenter()
+  const storedFilters = readStoredMarkerFilters()
+
+  localStorage.setItem(MARKER_FILTERS_STORAGE_KEY, JSON.stringify({
+    ...(storedFilters && typeof storedFilters === 'object' ? storedFilters : {}),
+    mapView: {
+      lat: Number(center.lat.toFixed(6)),
+      lng: Number(center.lng.toFixed(6)),
+      zoom: map.getZoom(),
+    },
   }))
 }
 
@@ -584,6 +660,20 @@ function resetView() {
   map?.setView(bounds.getCenter(), INITIAL_ZOOM)
 }
 
+function restoreMapView() {
+  if (!map) return false
+
+  const storedMapView = readStoredMapView()
+  if (!storedMapView) return false
+
+  const center = L.latLng(storedMapView.lat, storedMapView.lng)
+  if (!bounds.pad(0.18).contains(center)) return false
+
+  const zoom = Math.min(Math.max(storedMapView.zoom, map.getMinZoom()), map.getMaxZoom())
+  map.setView(center, zoom, { animate: false })
+  return true
+}
+
 function copyCoordinates() {
   if (!selectedLocation.value) return
   navigator.clipboard?.writeText(`${selectedLocation.value.lat.toFixed(6)}, ${selectedLocation.value.lng.toFixed(6)}`)
@@ -776,12 +866,19 @@ watch(filteredLocations, (visibleLocations) => {
   }
 })
 watch(activeDistricts, async () => {
+  if (skipNextDistrictAutoFit) {
+    skipNextDistrictAutoFit = false
+    return
+  }
+  if (!districtAutoFitReady) return
   await nextTick()
   const focusLocations = filteredLocations.value.filter((location) => !isTeleportLocation(location))
   fitLocationsBounds(focusLocations.length ? focusLocations : filteredLocations.value)
 }, { deep: true })
+watch(activeDistricts, persistMarkerFilters, { deep: true })
 watch(activeRouteId, () => nextTick(renderRouteArrows))
 watch([() => [...activeCategories.value], keepTeleportEnabled, showIncompleteOnly], persistMarkerFilters)
+watch(districtFilterOpen, persistMarkerFilters)
 watch(collapsedCategoryGroups, persistMarkerFilters, { deep: true })
 
 onMounted(async () => {
@@ -818,10 +915,14 @@ onMounted(async () => {
     if (editorMode.value && !isAddingSegment.value) openCreateLocation(mapLatLngToWorld(latlng))
     renderMarkers()
   })
-  resetView()
+  map.on('moveend', persistMapView)
+  if (!restoreMapView()) resetView()
   mapElement.value.dataset.minZoom = String(map.getMinZoom())
   mapElement.value.dataset.initialZoom = String(map.getZoom())
   renderMarkers()
+  mapViewPersistenceReady = true
+  persistMapView()
+  districtAutoFitReady = true
   connectNavigationSocket()
   window.addEventListener('keydown', handleKeydown)
 })
