@@ -27,6 +27,7 @@ const bounds = L.latLngBounds([-MAP_HEIGHT, 0], [0, MAP_WIDTH])
 const INITIAL_ZOOM = -3
 const MIN_ZOOM = -3
 const MARKER_FILTERS_STORAGE_KEY = 'nte-marker-filters'
+const ROUTES_STORAGE_KEY = 'nte-routes'
 const NAVIGATION_WEBSOCKET_URL = import.meta.env.VITE_MAANTE_NAVI_WEBSOCKET_URL || 'ws://127.0.0.1:8765'
 const NAVIGATION_RECONNECT_DELAY = 2000
 const DEFAULT_COLLAPSED_CATEGORY_GROUPS = {
@@ -127,7 +128,8 @@ const statusMessage = ref('')
 const routePanelOpen = ref(false)
 const activeRouteId = ref(null)
 const isAddingSegment = ref(false)
-const segmentMarkerIds = ref([])
+const segmentPoints = ref([])
+const routeImportInput = ref(null)
 const collapsedCategoryGroups = ref(initialCollapsedCategoryGroups)
 const navigationConnection = ref('disconnected')
 const navigationState = ref({
@@ -308,6 +310,19 @@ function showStatus(message) {
   }, 2600)
 }
 
+function readStoredRoutes() {
+  try {
+    const storedRoutes = JSON.parse(localStorage.getItem(ROUTES_STORAGE_KEY) || 'null')
+    return Array.isArray(storedRoutes) ? storedRoutes : null
+  } catch {
+    return null
+  }
+}
+
+function persistRoutesLocally() {
+  localStorage.setItem(ROUTES_STORAGE_KEY, JSON.stringify(routes.value))
+}
+
 async function loadLatestMapData() {
   try {
     const response = await fetch('/api/map-data')
@@ -319,6 +334,7 @@ async function loadLatestMapData() {
 }
 
 async function persistMapData() {
+  persistRoutesLocally()
   try {
     const response = await fetch('/api/map-data', {
       method: 'POST',
@@ -377,8 +393,24 @@ function selectLocation(location, fly = true) {
 
 function addRouteMarker(locationId) {
   if (!isAddingSegment.value) return
-  if (segmentMarkerIds.value.at(-1) === locationId) return
-  segmentMarkerIds.value = [...segmentMarkerIds.value, locationId]
+  const location = locationLookup.value[locationId]
+  if (!location || segmentPoints.value.at(-1)?.locationId === locationId) return
+  segmentPoints.value = [...segmentPoints.value, {
+    locationId,
+    lat: location.lat,
+    lng: location.lng,
+  }]
+  renderRouteArrows()
+}
+
+function addRouteCoordinate(point) {
+  if (!isAddingSegment.value) return
+  const previous = segmentPoints.value.at(-1)
+  if (previous && previous.lat === point.lat && previous.lng === point.lng) return
+  segmentPoints.value = [...segmentPoints.value, {
+    lat: Number(point.lat.toFixed(6)),
+    lng: Number(point.lng.toFixed(6)),
+  }]
   renderRouteArrows()
 }
 
@@ -422,11 +454,85 @@ function drawArrow(from, to, color, temporary = false) {
   }).addTo(arrowLayer)
 }
 
-function drawMarkerPath(markerIds, color, temporary = false) {
-  for (let index = 0; index < markerIds.length - 1; index += 1) {
-    const from = locationLookup.value[markerIds[index]]
-    const to = locationLookup.value[markerIds[index + 1]]
-    if (from && to) drawArrow(from, to, color, temporary)
+function normalizeRoutePoint(point) {
+  if (typeof point === 'string') {
+    const location = locationLookup.value[point]
+    return location ? { locationId: point, lat: location.lat, lng: location.lng } : null
+  }
+  if (!point || typeof point !== 'object') return null
+  const location = point.locationId ? locationLookup.value[point.locationId] : null
+  const lat = Number(location?.lat ?? point.lat)
+  const lng = Number(location?.lng ?? point.lng)
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null
+  return {
+    ...(point.locationId ? { locationId: String(point.locationId) } : {}),
+    lat,
+    lng,
+  }
+}
+
+function getSegmentPoints(segment) {
+  const points = Array.isArray(segment?.points) ? segment.points : segment?.markerIds
+  return Array.isArray(points) ? points.map(normalizeRoutePoint).filter(Boolean) : []
+}
+
+function drawRoutePath(points, color, temporary = false) {
+  points.forEach((point, index) => {
+    L.circleMarker(worldToMapLatLng(point), {
+      className: 'route-point',
+      color,
+      fillColor: color,
+      fillOpacity: temporary ? 0.72 : 0.9,
+      opacity: 1,
+      radius: point.locationId ? 4 : 5,
+      weight: 2,
+    }).addTo(arrowLayer)
+    if (index > 0) drawArrow(points[index - 1], point, color, temporary)
+  })
+}
+
+function normalizeRoutes(importedRoutes) {
+  return importedRoutes.filter((route) => route && typeof route === 'object').map((route, routeIndex) => ({
+    id: String(route.id || `route-${Date.now()}-${routeIndex}`),
+    name: String(route.name || `路线 ${routeIndex + 1}`),
+    segments: Array.isArray(route.segments) ? route.segments.filter((segment) => segment && typeof segment === 'object').map((segment, segmentIndex) => ({
+      id: String(segment.id || `segment-${Date.now()}-${routeIndex}-${segmentIndex}`),
+      name: String(segment.name || `路段 ${segmentIndex + 1}`),
+      points: getSegmentPoints(segment),
+    })) : [],
+  }))
+}
+
+function exportRoutes() {
+  const payload = {
+    version: 1,
+    routes: normalizeRoutes(routes.value),
+  }
+  const blobUrl = URL.createObjectURL(new Blob([`${JSON.stringify(payload, null, 2)}\n`], { type: 'application/json' }))
+  const link = document.createElement('a')
+  link.href = blobUrl
+  link.download = `maan-te-routes-${new Date().toISOString().slice(0, 10)}.json`
+  link.click()
+  URL.revokeObjectURL(blobUrl)
+  showStatus('路线 JSON 已导出')
+}
+
+async function importRoutes(event) {
+  const [file] = event.target.files || []
+  event.target.value = ''
+  if (!file) return
+  try {
+    const payload = JSON.parse(await file.text())
+    const importedRoutes = Array.isArray(payload) ? payload : payload.routes
+    if (!Array.isArray(importedRoutes)) throw new Error('invalid routes')
+    mapData.value.routes = normalizeRoutes(importedRoutes)
+    activeRouteId.value = routes.value[0]?.id || null
+    cancelSegment()
+    await persistMapData()
+    renderRouteArrows()
+    showStatus(`已导入 ${routes.value.length} 条路线`)
+  } catch {
+    showStatus('路线 JSON 格式无效')
   }
 }
 
@@ -434,11 +540,11 @@ function renderRouteArrows() {
   if (!arrowLayer) return
   arrowLayer.clearLayers()
   if (isAddingSegment.value) {
-    drawMarkerPath(segmentMarkerIds.value, '#ffd27d', true)
+    drawRoutePath(segmentPoints.value, '#ffd27d', true)
     return
   }
   const colors = ['#ffd27d', '#8adfd6', '#e8a6ff', '#ff8a70', '#87a9ff']
-  activeRoute.value?.segments.forEach((segment, index) => drawMarkerPath(segment.markerIds, colors[index % colors.length]))
+  activeRoute.value?.segments.forEach((segment, index) => drawRoutePath(getSegmentPoints(segment), colors[index % colors.length]))
 }
 
 function createNavigationIcon() {
@@ -539,7 +645,7 @@ function connectNavigationSocket() {
 
 function focusSegment(segment) {
   if (!map) return
-  const points = segment.markerIds.map((id) => locationLookup.value[id]).filter(Boolean).map(worldToMapLatLng)
+  const points = getSegmentPoints(segment).map(worldToMapLatLng)
   if (points.length) map.flyToBounds(L.latLngBounds(points), { padding: [80, 80], duration: 0.45 })
 }
 
@@ -756,7 +862,12 @@ async function deleteLocation(location) {
   mapData.value.locations = locations.value.filter((item) => item.id !== location.id)
   mapData.value.routes.forEach((route) => {
     route.segments.forEach((segment) => {
-      segment.markerIds = segment.markerIds.filter((id) => id !== location.id)
+      segment.points = getSegmentPoints(segment).map((point) => (
+        point.locationId === location.id
+          ? { lat: point.lat, lng: point.lng }
+          : point
+      ))
+      delete segment.markerIds
     })
   })
   selectedLocation.value = null
@@ -813,27 +924,27 @@ async function deleteRoute(route) {
 function startSegment() {
   if (!activeRoute.value) return
   isAddingSegment.value = true
-  segmentMarkerIds.value = []
+  segmentPoints.value = []
   selectedLocation.value = null
 }
 
 function cancelSegment() {
   isAddingSegment.value = false
-  segmentMarkerIds.value = []
+  segmentPoints.value = []
   renderRouteArrows()
 }
 
 async function finishSegment() {
-  if (!activeRoute.value || segmentMarkerIds.value.length < 2) return
+  if (!activeRoute.value || segmentPoints.value.length < 2) return
   const name = window.prompt('路段名称')
   if (!name?.trim()) return
   activeRoute.value.segments.push({
     id: `segment-${Date.now()}`,
     name: name.trim(),
-    markerIds: [...segmentMarkerIds.value],
+    points: [...segmentPoints.value],
   })
   isAddingSegment.value = false
-  segmentMarkerIds.value = []
+  segmentPoints.value = []
   await persistMapData()
   renderRouteArrows()
 }
@@ -883,6 +994,8 @@ watch(collapsedCategoryGroups, persistMarkerFilters, { deep: true })
 
 onMounted(async () => {
   await loadLatestMapData()
+  const storedRoutes = readStoredRoutes()
+  if (storedRoutes) mapData.value.routes = normalizeRoutes(storedRoutes)
   restoreMarkerFilters()
   map = L.map(mapElement.value, {
     crs: L.CRS.Simple,
@@ -912,7 +1025,8 @@ onMounted(async () => {
   map.on('mousemove', ({ latlng }) => { coordinates.value = mapLatLngToWorld(latlng) })
   map.on('click', ({ latlng }) => {
     selectedLocation.value = null
-    if (editorMode.value && !isAddingSegment.value) openCreateLocation(mapLatLngToWorld(latlng))
+    if (isAddingSegment.value) addRouteCoordinate(mapLatLngToWorld(latlng))
+    else if (editorMode.value) openCreateLocation(mapLatLngToWorld(latlng))
     renderMarkers()
   })
   map.on('moveend', persistMapView)
@@ -1083,6 +1197,11 @@ onUnmounted(() => {
         <div><p class="eyebrow">ROUTES</p><h2>路线规划</h2></div>
         <button v-if="editorMode" type="button" class="text-button" @click="createRoute">+ 新建</button>
       </div>
+      <div class="route-file-actions">
+        <button type="button" @click="routeImportInput?.click()">导入 JSON</button>
+        <button type="button" :disabled="!routes.length" @click="exportRoutes">导出 JSON</button>
+        <input ref="routeImportInput" type="file" accept="application/json,.json" @change="importRoutes" />
+      </div>
       <div class="route-list">
         <button v-for="route in routes" :key="route.id" type="button" :class="{ active: activeRouteId === route.id }" @click="activeRouteId = route.id">
           <span>{{ route.name }}</span><small>{{ route.segments.length }} 个路段</small>
@@ -1094,15 +1213,15 @@ onUnmounted(() => {
           <button v-if="editorMode" type="button" @click="deleteRoute(activeRoute)">删除路线</button>
         </div>
         <div v-if="isAddingSegment" class="segment-editor">
-          <span>依次点击地图标点：{{ segmentMarkerIds.length }} 个</span>
-          <button type="button" @click="segmentMarkerIds = segmentMarkerIds.slice(0, -1); renderRouteArrows()">撤销</button>
+          <span>依次点击已有标点或地图空白处：{{ segmentPoints.length }} 个</span>
+          <button type="button" @click="segmentPoints = segmentPoints.slice(0, -1); renderRouteArrows()">撤销</button>
           <button type="button" @click="cancelSegment">取消</button>
-          <button type="button" :disabled="segmentMarkerIds.length < 2" @click="finishSegment">完成</button>
+          <button type="button" :disabled="segmentPoints.length < 2" @click="finishSegment">完成</button>
         </div>
         <button v-else-if="editorMode" class="add-segment-button" type="button" @click="startSegment">+ 添加路段</button>
         <div class="segment-list">
           <button v-for="segment in activeRoute.segments" :key="segment.id" type="button" @click="focusSegment(segment)">
-            <span>{{ segment.name }}</span><small>{{ segment.markerIds.length }} 个点</small>
+            <span>{{ segment.name }}</span><small>{{ getSegmentPoints(segment).length }} 个点</small>
             <i v-if="editorMode" @click.stop="deleteSegment(segment)">×</i>
           </button>
         </div>
