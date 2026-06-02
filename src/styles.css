@@ -794,12 +794,49 @@ kbd {
   font-size: 12px;
 }
 
+.navigation-status {
+  color: #a7a7a7;
+}
+
+.navigation-status--connected {
+  color: #b8fff2;
+}
+
+.navigation-status--connecting {
+  color: #ffe0a6;
+}
+
 .detail-card + .map-hud {
   right: 400px;
 }
 
 .marker-shell {
   background: transparent;
+}
+
+.navigation-arrow-shell {
+  background: transparent;
+}
+
+.navigation-arrow {
+  display: flex;
+  width: 30px;
+  height: 35px;
+  align-items: center;
+  justify-content: center;
+}
+
+.navigation-arrow img {
+  width: 30px;
+  height: 35px;
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.65));
+  image-rendering: pixelated;
+  transform-origin: 50% 50%;
+  transition: transform 100ms linear;
+}
+
+.navigation-arrow--angle-missing {
+  opacity: 0.62;
 }
 
 .map-marker {

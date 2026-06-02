@@ -20,3 +20,10 @@ export function mapLatLngToWorld({ lat, lng }) {
     lng: (lng - MAP_CONFIG.worldOriginPixel.x) / MAP_CONFIG.pixelsPerWorldUnit,
   }
 }
+
+export function mapPixelToMapLatLng({ pixelX, pixelY, sourceWidth = MAP_WIDTH, sourceHeight = MAP_HEIGHT }) {
+  return [
+    -pixelY * MAP_HEIGHT / sourceHeight,
+    pixelX * MAP_WIDTH / sourceWidth,
+  ]
+}
