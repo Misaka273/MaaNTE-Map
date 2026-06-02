@@ -1,0 +1,727 @@
+<script setup>
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import L from 'leaflet'
+import 'leaflet.markercluster'
+import {
+  initialMapData,
+  MAP_HEIGHT,
+  MAP_WIDTH,
+  TILE_SIZE,
+  mapLatLngToWorld,
+  worldToMapLatLng,
+} from './data/locations'
+
+const clone = (value) => JSON.parse(JSON.stringify(value))
+const publicAssetUrl = (path) => path && !/^(?:[a-z]+:)?\/\//i.test(path) && !path.startsWith('data:') && !path.startsWith('blob:')
+  ? `${import.meta.env.BASE_URL}${path.replace(/^\/+/, '')}`
+  : path
+const mapData = ref(clone(initialMapData))
+const categories = computed(() => mapData.value.categories)
+const visibleCategories = computed(() => categories.value.filter((category) => !category.isHidden))
+const locations = computed(() => mapData.value.locations)
+const routes = computed(() => mapData.value.routes)
+const categoryLookup = computed(() => Object.fromEntries(categories.value.map((category) => [category.id, category])))
+const locationLookup = computed(() => Object.fromEntries(locations.value.map((location) => [location.id, location])))
+const bounds = L.latLngBounds([-MAP_HEIGHT, 0], [0, MAP_WIDTH])
+const INITIAL_ZOOM = -3
+const MIN_ZOOM = -3
+
+function readStoredIds(key) {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(key) || '[]'))
+  } catch {
+    return new Set()
+  }
+}
+
+function getInitialCategories() {
+  return new Set(visibleCategories.value.map((category) => category.id))
+}
+
+const mapElement = ref(null)
+const searchInput = ref(null)
+const query = ref('')
+const activeCategories = ref(getInitialCategories())
+const keepTeleportEnabled = ref(true)
+const selectedLocation = ref(null)
+const completedIds = ref(readStoredIds('nte-completed'))
+const favoriteIds = ref(readStoredIds('nte-favorites'))
+const showIncompleteOnly = ref(false)
+const coordinates = ref({ lat: 0, lng: 0 })
+const sidebarCollapsed = ref(false)
+const editorMode = ref(false)
+const editorFormOpen = ref(false)
+const editingLocationId = ref(null)
+const previewImage = ref('')
+const statusMessage = ref('')
+const routePanelOpen = ref(false)
+const activeRouteId = ref(null)
+const isAddingSegment = ref(false)
+const segmentMarkerIds = ref([])
+
+const emptyLocationForm = () => ({
+  name: '',
+  types: [],
+  district: '',
+  lat: 0,
+  lng: 0,
+  description: '',
+  tagsText: '',
+  customTypeId: '',
+  customTypeText: '',
+  customTypeGroup: '',
+  customTypeNewGroup: '',
+  pendingCustomTypes: [],
+  images: [],
+})
+const locationForm = ref(emptyLocationForm())
+const editorCategories = computed(() => [...categories.value, ...locationForm.value.pendingCustomTypes])
+const editorCategoryGroups = computed(() => [...new Set(editorCategories.value.map((category) => category.group))])
+
+let map
+let markerLayer
+let arrowLayer
+const markerLookup = new Map()
+
+const activeRoute = computed(() => routes.value.find((route) => route.id === activeRouteId.value) || null)
+const getVisibleTypes = (location) => location.types.filter((type) => !categoryLookup.value[type]?.isHidden)
+const visibleLocationIds = computed(() => new Set(
+  locations.value
+    .filter((location) => getVisibleTypes(location).length)
+    .map((location) => location.id),
+))
+const completedCount = computed(() => [...completedIds.value].filter((id) => visibleLocationIds.value.has(id)).length)
+const progress = computed(() => Math.round((completedCount.value / Math.max(visibleLocationIds.value.size, 1)) * 100))
+
+const filteredLocations = computed(() => {
+  const keyword = query.value.trim().toLowerCase()
+  return locations.value.filter((location) => {
+    const categoryVisible = location.types.some((type) => activeCategories.value.has(type))
+    const incompleteVisible = !showIncompleteOnly.value || !completedIds.value.has(location.id)
+    const typeLabels = location.types.map((type) => categoryLookup.value[type]?.label || type)
+    const text = `${location.name} ${location.district} ${location.tags.join(' ')} ${typeLabels.join(' ')}`.toLowerCase()
+    return categoryVisible && incompleteVisible && (!keyword || text.includes(keyword))
+  })
+})
+
+const visibleCounts = computed(() =>
+  Object.fromEntries(visibleCategories.value.map((category) => [
+    category.id,
+    locations.value.filter((location) => location.types.includes(category.id)).length,
+  ])),
+)
+
+const groupedCategories = computed(() => {
+  const groups = []
+  visibleCategories.value.forEach((category) => {
+    let group = groups.find((item) => item.label === category.group)
+    if (!group) {
+      group = { label: category.group, categories: [] }
+      groups.push(group)
+    }
+    group.categories.push(category)
+  })
+  return groups
+})
+const teleportCategoryIds = computed(() =>
+  visibleCategories.value.filter((category) => category.group === '传送点').map((category) => category.id),
+)
+
+function showStatus(message) {
+  statusMessage.value = message
+  window.setTimeout(() => {
+    if (statusMessage.value === message) statusMessage.value = ''
+  }, 2600)
+}
+
+async function loadLatestMapData() {
+  try {
+    const response = await fetch('/api/map-data')
+    if (!response.ok) return
+    mapData.value = await response.json()
+  } catch {
+    // Static deployments use the bundled snapshot.
+  }
+}
+
+async function persistMapData() {
+  try {
+    const response = await fetch('/api/map-data', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(mapData.value),
+    })
+    if (!response.ok) throw new Error('保存失败')
+    showStatus('本地数据已保存')
+  } catch {
+    showStatus('当前环境不可写，请在本地开发服务器中编辑')
+  }
+}
+
+function getPrimaryCategory(location) {
+  const visibleTypes = getVisibleTypes(location)
+  const activeType = visibleTypes.find((type) => activeCategories.value.has(type))
+  return categoryLookup.value[activeType || visibleTypes[0]]
+}
+
+function categoryIconHtml(category) {
+  return category?.iconUrl
+    ? `<img src="${publicAssetUrl(category.iconUrl)}" alt="" />`
+    : category?.icon || '·'
+}
+
+function markerHtml(location) {
+  const category = getPrimaryCategory(location)
+  const completed = completedIds.value.has(location.id)
+  const selected = selectedLocation.value?.id === location.id
+  const extraCount = Math.max(getVisibleTypes(location).length - 1, 0)
+  return `
+    <div class="map-marker ${completed ? 'map-marker--completed' : ''} ${selected ? 'map-marker--selected' : ''}"
+      style="--marker-color:${category?.color || '#8adfd6'}">
+      <span>${categoryIconHtml(category)}</span>
+      ${extraCount ? `<b>+${extraCount}</b>` : ''}
+    </div>
+  `
+}
+
+function createIcon(location) {
+  return L.divIcon({
+    className: 'marker-shell',
+    html: markerHtml(location),
+    iconSize: [36, 44],
+    iconAnchor: [18, 42],
+  })
+}
+
+function selectLocation(location, fly = true) {
+  selectedLocation.value = location
+  renderMarkers()
+  if (fly && map) {
+    map.flyTo(worldToMapLatLng(location), Math.max(map.getZoom(), -2), { duration: 0.45 })
+  }
+}
+
+function addRouteMarker(locationId) {
+  if (!isAddingSegment.value) return
+  if (segmentMarkerIds.value.at(-1) === locationId) return
+  segmentMarkerIds.value = [...segmentMarkerIds.value, locationId]
+  renderRouteArrows()
+}
+
+function renderMarkers() {
+  if (!markerLayer) return
+  markerLayer.clearLayers()
+  markerLookup.clear()
+  filteredLocations.value.forEach((location) => {
+    const marker = L.marker(worldToMapLatLng(location), {
+      icon: createIcon(location),
+      title: location.name,
+      riseOnHover: true,
+    }).on('click', () => {
+      if (isAddingSegment.value) addRouteMarker(location.id)
+      else selectLocation(location, false)
+    })
+    markerLayer.addLayer(marker)
+    markerLookup.set(location.id, marker)
+  })
+}
+
+function drawArrow(from, to, color, temporary = false) {
+  const start = worldToMapLatLng(from)
+  const end = worldToMapLatLng(to)
+  L.polyline([start, end], {
+    color,
+    weight: 3,
+    opacity: temporary ? 0.7 : 0.9,
+    dashArray: temporary ? '7 6' : undefined,
+  }).addTo(arrowLayer)
+  const mid = [(start[0] + end[0]) / 2, (start[1] + end[1]) / 2]
+  const angle = -Math.atan2(end[0] - start[0], end[1] - start[1]) * 180 / Math.PI
+  L.marker(mid, {
+    interactive: false,
+    icon: L.divIcon({
+      className: 'route-arrow',
+      html: `<i style="transform:rotate(${angle}deg);border-left-color:${color}"></i>`,
+      iconSize: [10, 10],
+      iconAnchor: [5, 5],
+    }),
+  }).addTo(arrowLayer)
+}
+
+function drawMarkerPath(markerIds, color, temporary = false) {
+  for (let index = 0; index < markerIds.length - 1; index += 1) {
+    const from = locationLookup.value[markerIds[index]]
+    const to = locationLookup.value[markerIds[index + 1]]
+    if (from && to) drawArrow(from, to, color, temporary)
+  }
+}
+
+function renderRouteArrows() {
+  if (!arrowLayer) return
+  arrowLayer.clearLayers()
+  if (isAddingSegment.value) {
+    drawMarkerPath(segmentMarkerIds.value, '#ffd27d', true)
+    return
+  }
+  const colors = ['#ffd27d', '#8adfd6', '#e8a6ff', '#ff8a70', '#87a9ff']
+  activeRoute.value?.segments.forEach((segment, index) => drawMarkerPath(segment.markerIds, colors[index % colors.length]))
+}
+
+function focusSegment(segment) {
+  if (!map) return
+  const points = segment.markerIds.map((id) => locationLookup.value[id]).filter(Boolean).map(worldToMapLatLng)
+  if (points.length) map.flyToBounds(L.latLngBounds(points), { padding: [80, 80], duration: 0.45 })
+}
+
+function toggleCategory(categoryId) {
+  if (keepTeleportEnabled.value && teleportCategoryIds.value.includes(categoryId)) return
+  const next = new Set(activeCategories.value)
+  next.has(categoryId) ? next.delete(categoryId) : next.add(categoryId)
+  activeCategories.value = next
+}
+
+function selectAllCategories() {
+  activeCategories.value = new Set(visibleCategories.value.map((category) => category.id))
+}
+
+function clearCategories() {
+  activeCategories.value = new Set(keepTeleportEnabled.value ? teleportCategoryIds.value : [])
+}
+
+function toggleTeleportProtection() {
+  keepTeleportEnabled.value = !keepTeleportEnabled.value
+  if (!keepTeleportEnabled.value) return
+  activeCategories.value = new Set([...activeCategories.value, ...teleportCategoryIds.value])
+}
+
+function toggleCompleted(locationId) {
+  const next = new Set(completedIds.value)
+  next.has(locationId) ? next.delete(locationId) : next.add(locationId)
+  completedIds.value = next
+  localStorage.setItem('nte-completed', JSON.stringify([...next]))
+}
+
+function toggleFavorite(locationId) {
+  const next = new Set(favoriteIds.value)
+  next.has(locationId) ? next.delete(locationId) : next.add(locationId)
+  favoriteIds.value = next
+  localStorage.setItem('nte-favorites', JSON.stringify([...next]))
+}
+
+function resetView() {
+  map?.setView(bounds.getCenter(), INITIAL_ZOOM)
+}
+
+function copyCoordinates() {
+  if (!selectedLocation.value) return
+  navigator.clipboard?.writeText(`${selectedLocation.value.lat.toFixed(6)}, ${selectedLocation.value.lng.toFixed(6)}`)
+  showStatus('坐标已复制')
+}
+
+function openCreateLocation(point) {
+  editingLocationId.value = null
+  locationForm.value = { ...emptyLocationForm(), ...point, types: visibleCategories.value.length ? [visibleCategories.value[0].id] : [] }
+  editorFormOpen.value = true
+}
+
+function openEditLocation(location) {
+  editingLocationId.value = location.id
+  locationForm.value = {
+    ...emptyLocationForm(),
+    ...clone(location),
+    tagsText: location.tags.join(', '),
+    images: [...location.images],
+  }
+  editorFormOpen.value = true
+}
+
+function addCustomType() {
+  const idPrefix = locationForm.value.customTypeId.trim()
+  const label = locationForm.value.customTypeText.trim()
+  const group = locationForm.value.customTypeNewGroup.trim() || locationForm.value.customTypeGroup
+  if (!idPrefix || !label || !group) return
+  let id = idPrefix
+  let suffix = 2
+  while (editorCategories.value.some((category) => category.id === id)) {
+    id = `${idPrefix}-${suffix}`
+    suffix += 1
+  }
+  const category = {
+    id,
+    group,
+    label,
+    icon: '·',
+    color: '#87a9ff',
+    isDefault: false,
+  }
+  locationForm.value.pendingCustomTypes.push(category)
+  locationForm.value.types.push(category.id)
+  locationForm.value.customTypeId = ''
+  locationForm.value.customTypeText = ''
+  locationForm.value.customTypeGroup = group
+  locationForm.value.customTypeNewGroup = ''
+}
+
+async function saveLocation() {
+  const form = locationForm.value
+  if (!form.name.trim() || !form.types.length) {
+    showStatus('请填写名称并选择至少一个类型')
+    return
+  }
+  mapData.value.categories.push(...form.pendingCustomTypes)
+  const saved = {
+    id: editingLocationId.value || `local-${Date.now()}`,
+    name: form.name.trim(),
+    types: [...form.types],
+    district: form.district.trim() || '全地图',
+    lat: Number(form.lat),
+    lng: Number(form.lng),
+    description: form.description.trim(),
+    tags: form.tagsText.split(',').map((tag) => tag.trim()).filter(Boolean),
+    images: [...form.images],
+  }
+  const index = locations.value.findIndex((location) => location.id === saved.id)
+  if (index >= 0) mapData.value.locations.splice(index, 1, saved)
+  else mapData.value.locations.push(saved)
+  editorFormOpen.value = false
+  selectedLocation.value = saved
+  await persistMapData()
+  renderMarkers()
+}
+
+async function deleteLocation(location) {
+  if (!window.confirm(`删除“${location.name}”？`)) return
+  mapData.value.locations = locations.value.filter((item) => item.id !== location.id)
+  mapData.value.routes.forEach((route) => {
+    route.segments.forEach((segment) => {
+      segment.markerIds = segment.markerIds.filter((id) => id !== location.id)
+    })
+  })
+  selectedLocation.value = null
+  await persistMapData()
+  renderMarkers()
+  renderRouteArrows()
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result)
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
+}
+
+async function uploadImages(event) {
+  const files = [...event.target.files]
+  for (const file of files) {
+    try {
+      const response = await fetch('/api/upload-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dataUrl: await readFileAsDataUrl(file), name: file.name }),
+      })
+      const data = await response.json()
+      if (!data.ok) throw new Error(data.error)
+      locationForm.value.images.push(data.path)
+    } catch {
+      showStatus('图片上传失败，请使用本地开发服务器')
+    }
+  }
+  event.target.value = ''
+}
+
+async function createRoute() {
+  const name = window.prompt('路线名称')
+  if (!name?.trim()) return
+  const route = { id: `route-${Date.now()}`, name: name.trim(), segments: [] }
+  mapData.value.routes.push(route)
+  activeRouteId.value = route.id
+  await persistMapData()
+}
+
+async function deleteRoute(route) {
+  if (!window.confirm(`删除路线“${route.name}”？`)) return
+  mapData.value.routes = routes.value.filter((item) => item.id !== route.id)
+  activeRouteId.value = null
+  await persistMapData()
+  renderRouteArrows()
+}
+
+function startSegment() {
+  if (!activeRoute.value) return
+  isAddingSegment.value = true
+  segmentMarkerIds.value = []
+  selectedLocation.value = null
+}
+
+function cancelSegment() {
+  isAddingSegment.value = false
+  segmentMarkerIds.value = []
+  renderRouteArrows()
+}
+
+async function finishSegment() {
+  if (!activeRoute.value || segmentMarkerIds.value.length < 2) return
+  const name = window.prompt('路段名称')
+  if (!name?.trim()) return
+  activeRoute.value.segments.push({
+    id: `segment-${Date.now()}`,
+    name: name.trim(),
+    markerIds: [...segmentMarkerIds.value],
+  })
+  isAddingSegment.value = false
+  segmentMarkerIds.value = []
+  await persistMapData()
+  renderRouteArrows()
+}
+
+async function deleteSegment(segment) {
+  if (!activeRoute.value || !window.confirm(`删除路段“${segment.name}”？`)) return
+  activeRoute.value.segments = activeRoute.value.segments.filter((item) => item.id !== segment.id)
+  await persistMapData()
+  renderRouteArrows()
+}
+
+function handleKeydown(event) {
+  if (event.key === '/' && document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') {
+    event.preventDefault()
+    searchInput.value?.focus()
+  }
+  if (event.key === 'Escape') {
+    previewImage.value = ''
+    editorFormOpen.value = false
+    selectedLocation.value = null
+    searchInput.value?.blur()
+  }
+}
+
+watch([filteredLocations, completedIds, () => selectedLocation.value?.id], () => nextTick(renderMarkers), { deep: true })
+watch(filteredLocations, (visibleLocations) => {
+  if (selectedLocation.value && !visibleLocations.some((location) => location.id === selectedLocation.value.id)) {
+    selectedLocation.value = null
+  }
+})
+watch(activeRouteId, () => nextTick(renderRouteArrows))
+
+onMounted(async () => {
+  await loadLatestMapData()
+  activeCategories.value = getInitialCategories()
+  map = L.map(mapElement.value, {
+    crs: L.CRS.Simple,
+    minZoom: MIN_ZOOM,
+    maxZoom: 1,
+    maxBounds: bounds.pad(0.18),
+    zoomControl: false,
+    attributionControl: false,
+  })
+  L.tileLayer(publicAssetUrl('/tiles/{z}/{x}/{y}.jpg'), {
+    bounds,
+    minZoom: MIN_ZOOM,
+    maxNativeZoom: 0,
+    maxZoom: 1,
+    noWrap: true,
+    tileSize: TILE_SIZE,
+    keepBuffer: 3,
+  }).addTo(map)
+  L.control.zoom({ position: 'bottomright' }).addTo(map)
+  markerLayer = L.markerClusterGroup({
+    chunkedLoading: true,
+    maxClusterRadius: 52,
+    disableClusteringAtZoom: 0,
+    showCoverageOnHover: false,
+  }).addTo(map)
+  arrowLayer = L.layerGroup().addTo(map)
+  map.on('mousemove', ({ latlng }) => { coordinates.value = mapLatLngToWorld(latlng) })
+  map.on('click', ({ latlng }) => {
+    selectedLocation.value = null
+    if (editorMode.value && !isAddingSegment.value) openCreateLocation(mapLatLngToWorld(latlng))
+    renderMarkers()
+  })
+  resetView()
+  mapElement.value.dataset.minZoom = String(map.getMinZoom())
+  mapElement.value.dataset.initialZoom = String(map.getZoom())
+  renderMarkers()
+  window.addEventListener('keydown', handleKeydown)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleKeydown)
+  map?.remove()
+})
+</script>
+
+<template>
+  <main class="app-shell">
+    <div ref="mapElement" class="map-canvas" />
+
+    <header class="topbar glass-panel">
+      <div class="brand-block">
+        <img class="brand-mark" :src="publicAssetUrl('/logo.png')" alt="MaaNTE" />
+        <div>
+          <p class="eyebrow">MAANTE MAP DATABASE</p>
+          <h1>MaaNTE在线地图工具</h1>
+        </div>
+      </div>
+      <label class="search-box">
+        <span class="search-icon">⌕</span>
+        <input ref="searchInput" v-model="query" type="search" placeholder="搜索地点、区域或关键词..." />
+        <kbd>/</kbd>
+      </label>
+      <div class="toolbar">
+        <button :class="{ 'toolbar-button--active': editorMode }" type="button" @click="editorMode = !editorMode">
+          {{ editorMode ? '编辑已开启' : '编辑地图' }}
+        </button>
+        <button :class="{ 'toolbar-button--active': routePanelOpen }" type="button" @click="routePanelOpen = !routePanelOpen">
+          路线
+        </button>
+        <div class="progress-block">
+          <div class="progress-copy"><span>探索进度</span><strong>{{ progress }}%</strong></div>
+          <div class="progress-track"><i :style="{ width: `${progress}%` }" /></div>
+          <small>{{ completedCount }} / {{ visibleLocationIds.size }} 已完成</small>
+        </div>
+      </div>
+    </header>
+
+    <aside class="sidebar glass-panel" :class="{ 'sidebar--collapsed': sidebarCollapsed }">
+      <button class="sidebar-toggle" type="button" @click="sidebarCollapsed = !sidebarCollapsed">
+        {{ sidebarCollapsed ? '›' : '‹' }}
+      </button>
+      <div class="sidebar-content">
+        <div class="sidebar-heading">
+          <div><p class="eyebrow">MARKER CATEGORIES</p><h2>标记分类</h2></div>
+          <div class="filter-actions">
+            <button type="button" class="text-button" @click="selectAllCategories">全选</button>
+            <button type="button" class="text-button" @click="clearCategories">清空</button>
+          </div>
+        </div>
+        <div class="category-list">
+          <template v-for="group in groupedCategories" :key="group.label">
+            <p class="category-group">{{ group.label }}</p>
+            <button v-for="category in group.categories" :key="category.id" class="category-button"
+              :class="{ 'category-button--muted': !activeCategories.has(category.id) }" type="button" @click="toggleCategory(category.id)">
+              <span class="category-icon" :style="{ '--category-color': category.color }">
+                <img v-if="category.iconUrl" :src="publicAssetUrl(category.iconUrl)" alt="" />
+                <template v-else>{{ category.icon }}</template>
+              </span>
+              <span>{{ category.label }}</span><small>{{ visibleCounts[category.id] }}</small>
+            </button>
+          </template>
+        </div>
+        <div class="sidebar-footer">
+          <label class="switch-row">
+            <span><b>传送点保持开启</b><small>清空分类时仍显示传送点</small></span>
+            <input :checked="keepTeleportEnabled" type="checkbox" @change="toggleTeleportProtection" /><i />
+          </label>
+          <label class="switch-row">
+            <span><b>仅显示未完成</b><small>隐藏已经探索的标记</small></span>
+            <input v-model="showIncompleteOnly" type="checkbox" /><i />
+          </label>
+          <div class="filter-summary">{{ filteredLocations.length }} 个标记显示中</div>
+        </div>
+      </div>
+    </aside>
+
+    <aside v-if="routePanelOpen" class="route-panel glass-panel">
+      <div class="sidebar-heading">
+        <div><p class="eyebrow">ROUTES</p><h2>路线规划</h2></div>
+        <button v-if="editorMode" type="button" class="text-button" @click="createRoute">+ 新建</button>
+      </div>
+      <div class="route-list">
+        <button v-for="route in routes" :key="route.id" type="button" :class="{ active: activeRouteId === route.id }" @click="activeRouteId = route.id">
+          <span>{{ route.name }}</span><small>{{ route.segments.length }} 个路段</small>
+        </button>
+      </div>
+      <template v-if="activeRoute">
+        <div class="route-heading">
+          <b>{{ activeRoute.name }}</b>
+          <button v-if="editorMode" type="button" @click="deleteRoute(activeRoute)">删除路线</button>
+        </div>
+        <div v-if="isAddingSegment" class="segment-editor">
+          <span>依次点击地图标点：{{ segmentMarkerIds.length }} 个</span>
+          <button type="button" @click="segmentMarkerIds = segmentMarkerIds.slice(0, -1); renderRouteArrows()">撤销</button>
+          <button type="button" @click="cancelSegment">取消</button>
+          <button type="button" :disabled="segmentMarkerIds.length < 2" @click="finishSegment">完成</button>
+        </div>
+        <button v-else-if="editorMode" class="add-segment-button" type="button" @click="startSegment">+ 添加路段</button>
+        <div class="segment-list">
+          <button v-for="segment in activeRoute.segments" :key="segment.id" type="button" @click="focusSegment(segment)">
+            <span>{{ segment.name }}</span><small>{{ segment.markerIds.length }} 个点</small>
+            <i v-if="editorMode" @click.stop="deleteSegment(segment)">×</i>
+          </button>
+        </div>
+      </template>
+      <p v-else class="empty-copy">选择路线后可查看路段。</p>
+    </aside>
+
+    <section v-if="selectedLocation" class="detail-card glass-panel">
+      <button class="close-button" type="button" aria-label="关闭详情" @click="selectedLocation = null">×</button>
+      <div v-if="selectedLocation.images.length" class="image-gallery">
+        <img v-for="image in selectedLocation.images" :key="image" :src="publicAssetUrl(image)" :alt="selectedLocation.name" @click="previewImage = image" />
+      </div>
+      <p class="eyebrow">{{ selectedLocation.district }}</p>
+      <h2>{{ selectedLocation.name }}</h2>
+      <p v-if="selectedLocation.description" class="detail-description">{{ selectedLocation.description }}</p>
+      <div class="tag-row">
+        <span v-for="type in getVisibleTypes(selectedLocation)" :key="type">{{ categoryLookup[type]?.label || type }}</span>
+        <span v-for="tag in selectedLocation.tags" :key="tag"># {{ tag }}</span>
+      </div>
+      <button class="coordinate-row" type="button" @click="copyCoordinates">
+        <span>坐标</span><code>{{ selectedLocation.lat.toFixed(6) }}, {{ selectedLocation.lng.toFixed(6) }}</code><small>复制</small>
+      </button>
+      <div v-if="editorMode" class="detail-actions">
+        <button type="button" @click="openEditLocation(selectedLocation)">编辑</button>
+        <button type="button" class="danger-button" @click="deleteLocation(selectedLocation)">删除</button>
+      </div>
+      <div v-else class="detail-actions">
+        <button type="button" :class="{ 'action-button--active': favoriteIds.has(selectedLocation.id) }" @click="toggleFavorite(selectedLocation.id)">
+          {{ favoriteIds.has(selectedLocation.id) ? '★ 已收藏' : '☆ 收藏' }}
+        </button>
+        <button type="button" class="primary-action" :class="{ 'primary-action--done': completedIds.has(selectedLocation.id) }" @click="toggleCompleted(selectedLocation.id)">
+          {{ completedIds.has(selectedLocation.id) ? '✓ 已完成' : '标记完成' }}
+        </button>
+      </div>
+    </section>
+
+    <div class="map-hud glass-panel">
+      <button type="button" @click="resetView">重置视野</button>
+      <span>LAT {{ coordinates.lat.toFixed(2) }}</span><span>LNG {{ coordinates.lng.toFixed(2) }}</span>
+    </div>
+    <div v-if="editorMode" class="editor-tip glass-panel">编辑模式：点击地图空白处添加点位</div>
+    <div v-if="statusMessage" class="status-toast glass-panel">{{ statusMessage }}</div>
+
+    <div v-if="editorFormOpen" class="modal-backdrop" @click.self="editorFormOpen = false">
+      <form class="editor-form glass-panel" @submit.prevent="saveLocation">
+        <div class="sidebar-heading"><h2>{{ editingLocationId ? '编辑点位' : '新建点位' }}</h2><button type="button" class="close-button" @click="editorFormOpen = false">×</button></div>
+        <label>名称<input v-model="locationForm.name" required /></label>
+        <label>区域<input v-model="locationForm.district" placeholder="全地图" /></label>
+        <div class="form-grid"><label>LAT<input v-model.number="locationForm.lat" type="number" step="any" /></label><label>LNG<input v-model.number="locationForm.lng" type="number" step="any" /></label></div>
+        <label>描述<textarea v-model="locationForm.description" rows="3" /></label>
+        <label>搜索关键词（可选）<input v-model="locationForm.tagsText" placeholder="使用英文逗号分隔，用于辅助搜索" /></label>
+        <fieldset><legend>类型（可多选）</legend><div class="type-picker">
+          <label v-for="category in editorCategories" :key="category.id" :data-category-id="category.id" :data-category-group="category.group"><input v-model="locationForm.types" type="checkbox" :value="category.id" />{{ category.label }}</label>
+        </div>
+        <div class="custom-type-editor">
+          <p>添加自定义类型</p>
+          <div class="custom-type-row">
+            <label>类型 ID<input v-model="locationForm.customTypeId" placeholder="输入稳定 ID，例如 witch-house" @keydown.enter.prevent="addCustomType" /></label>
+            <label>类型名称<input v-model="locationForm.customTypeText" placeholder="输入自定义类型名称" @keydown.enter.prevent="addCustomType" /></label>
+            <label>归属大类<select v-model="locationForm.customTypeGroup" aria-label="选择标记大类">
+              <option disabled value="">请选择大类</option>
+              <option v-for="group in editorCategoryGroups" :key="group" :value="group">{{ group }}</option>
+            </select></label>
+            <label>或新建大类<input v-model="locationForm.customTypeNewGroup" placeholder="新建大类（可选）" @keydown.enter.prevent="addCustomType" /></label>
+          </div>
+          <button type="button" :disabled="!locationForm.customTypeId.trim() || !locationForm.customTypeText.trim() || (!locationForm.customTypeGroup && !locationForm.customTypeNewGroup.trim())" @click="addCustomType">+ 添加类型</button>
+        </div></fieldset>
+        <label>截图<input type="file" accept="image/*" multiple @change="uploadImages" /></label>
+        <div v-if="locationForm.images.length" class="form-images">
+          <span v-for="(image, index) in locationForm.images" :key="image"><img :src="publicAssetUrl(image)" alt="" /><button type="button" @click="locationForm.images.splice(index, 1)">×</button></span>
+        </div>
+        <div class="detail-actions editor-form-actions"><button type="button" @click="editorFormOpen = false">取消</button><button class="primary-action" type="submit">保存</button></div>
+      </form>
+    </div>
+
+    <div v-if="previewImage" class="image-preview" @click="previewImage = ''"><img :src="publicAssetUrl(previewImage)" alt="点位截图" @click.stop /></div>
+  </main>
+</template>
