@@ -42,10 +42,21 @@ function getInitialCategories() {
   return new Set(visibleCategories.value.map((category) => category.id))
 }
 
+function normalizeDistrictLabel(value) {
+  const label = String(value || '').trim()
+  if (!label) return ''
+  if (label === '全地图') return '全地图'
+  if (/�/.test(label) && label.endsWith('图')) return '全地图'
+  if (/^[鍏ㄥ湴鍥?]+$/.test(label)) return '全地图'
+  if (/^全.*图$/.test(label)) return '全地图'
+  return label
+}
+
 const mapElement = ref(null)
 const searchInput = ref(null)
 const query = ref('')
 const activeCategories = ref(getInitialCategories())
+const activeDistricts = ref(new Set())
 const keepTeleportEnabled = ref(true)
 const selectedLocation = ref(null)
 const completedIds = ref(readStoredIds('nte-completed'))
@@ -53,6 +64,8 @@ const favoriteIds = ref(readStoredIds('nte-favorites'))
 const showIncompleteOnly = ref(false)
 const coordinates = ref({ lat: 0, lng: 0 })
 const sidebarCollapsed = ref(false)
+const districtFilterOpen = ref(false)
+const clearCompletedConfirming = ref(false)
 const editorMode = ref(false)
 const editorFormOpen = ref(false)
 const editingLocationId = ref(null)
@@ -62,6 +75,11 @@ const routePanelOpen = ref(false)
 const activeRouteId = ref(null)
 const isAddingSegment = ref(false)
 const segmentMarkerIds = ref([])
+const collapsedCategoryGroups = ref({
+  探索度: false,
+  传送点: false,
+  怪物: true,
+})
 const navigationConnection = ref('disconnected')
 const navigationState = ref({
   position: null,
@@ -112,15 +130,28 @@ const visibleLocationIds = computed(() => new Set(
 ))
 const completedCount = computed(() => [...completedIds.value].filter((id) => visibleLocationIds.value.has(id)).length)
 const progress = computed(() => Math.round((completedCount.value / Math.max(visibleLocationIds.value.size, 1)) * 100))
+const districtOptions = computed(() => {
+  const districts = [...new Set(locations.value.map((location) => normalizeDistrictLabel(location.district)).filter(Boolean))]
+  return districts.sort((left, right) => {
+    if (left === '全地图') return -1
+    if (right === '全地图') return 1
+    return left.localeCompare(right, 'zh-CN')
+  })
+})
+const hasActiveDistricts = computed(() => activeDistricts.value.size > 0)
 
 const filteredLocations = computed(() => {
   const keyword = query.value.trim().toLowerCase()
   return locations.value.filter((location) => {
     const categoryVisible = location.types.some((type) => activeCategories.value.has(type))
+    const districtLabel = normalizeDistrictLabel(location.district)
+    const districtVisible = !activeDistricts.value.size
+      || activeDistricts.value.has(districtLabel)
+      || (districtLabel === '全地图' && isTeleportLocation(location))
     const incompleteVisible = !showIncompleteOnly.value || !completedIds.value.has(location.id)
     const typeLabels = location.types.map((type) => categoryLookup.value[type]?.label || type)
-    const text = `${location.name} ${location.district} ${location.tags.join(' ')} ${typeLabels.join(' ')}`.toLowerCase()
-    return categoryVisible && incompleteVisible && (!keyword || text.includes(keyword))
+    const text = `${location.name} ${districtLabel} ${location.tags.join(' ')} ${typeLabels.join(' ')}`.toLowerCase()
+    return categoryVisible && districtVisible && incompleteVisible && (!keyword || text.includes(keyword))
   })
 })
 
@@ -146,6 +177,7 @@ const groupedCategories = computed(() => {
 const teleportCategoryIds = computed(() =>
   visibleCategories.value.filter((category) => category.group === '传送点').map((category) => category.id),
 )
+const collapsibleGroupLabels = new Set(['探索度', '传送点', '怪物'])
 
 function restoreMarkerFilters() {
   let storedFilters
@@ -422,11 +454,73 @@ function focusSegment(segment) {
   if (points.length) map.flyToBounds(L.latLngBounds(points), { padding: [80, 80], duration: 0.45 })
 }
 
+function fitLocationsBounds(targetLocations) {
+  if (!map || !targetLocations.length) return
+  if (targetLocations.length === 1) {
+    map.flyTo(worldToMapLatLng(targetLocations[0]), -1, { duration: 0.45 })
+    return
+  }
+  const points = targetLocations.map(worldToMapLatLng)
+  map.flyToBounds(L.latLngBounds(points).pad(0.1), { duration: 0.45 })
+}
+
+function isTeleportLocation(location) {
+  return location.types.some((type) => teleportCategoryIds.value.includes(type))
+}
+
 function toggleCategory(categoryId) {
   if (keepTeleportEnabled.value && teleportCategoryIds.value.includes(categoryId)) return
   const next = new Set(activeCategories.value)
   next.has(categoryId) ? next.delete(categoryId) : next.add(categoryId)
   activeCategories.value = next
+}
+
+function isGroupFullySelected(group) {
+  return group.categories.every((category) => activeCategories.value.has(category.id))
+}
+
+function isGroupPartiallySelected(group) {
+  const selectedCount = group.categories.filter((category) => activeCategories.value.has(category.id)).length
+  return selectedCount > 0 && selectedCount < group.categories.length
+}
+
+function toggleCategoryGroupSelection(group) {
+  const categoryIds = group.categories.map((category) => category.id)
+  if (group.label === '传送点' && keepTeleportEnabled.value && isGroupFullySelected(group)) return
+
+  const next = new Set(activeCategories.value)
+  if (isGroupFullySelected(group)) {
+    categoryIds.forEach((categoryId) => {
+      if (!(keepTeleportEnabled.value && teleportCategoryIds.value.includes(categoryId))) {
+        next.delete(categoryId)
+      }
+    })
+  } else {
+    categoryIds.forEach((categoryId) => next.add(categoryId))
+  }
+  activeCategories.value = next
+}
+
+function toggleDistrict(district) {
+  const next = new Set(activeDistricts.value)
+  next.has(district) ? next.delete(district) : next.add(district)
+  activeDistricts.value = next
+}
+
+function clearDistricts() {
+  activeDistricts.value = new Set()
+}
+
+function toggleCategoryGroup(groupLabel) {
+  if (!collapsibleGroupLabels.has(groupLabel)) return
+  collapsedCategoryGroups.value = {
+    ...collapsedCategoryGroups.value,
+    [groupLabel]: !collapsedCategoryGroups.value[groupLabel],
+  }
+}
+
+function isCategoryGroupCollapsed(groupLabel) {
+  return Boolean(collapsedCategoryGroups.value[groupLabel])
 }
 
 function selectAllCategories() {
@@ -455,6 +549,22 @@ function toggleFavorite(locationId) {
   next.has(locationId) ? next.delete(locationId) : next.add(locationId)
   favoriteIds.value = next
   localStorage.setItem('nte-favorites', JSON.stringify([...next]))
+}
+
+function beginClearCompleted() {
+  if (!completedIds.value.size) return
+  clearCompletedConfirming.value = true
+}
+
+function cancelClearCompleted() {
+  clearCompletedConfirming.value = false
+}
+
+function clearCompleted() {
+  completedIds.value = new Set()
+  localStorage.setItem('nte-completed', JSON.stringify([]))
+  clearCompletedConfirming.value = false
+  showStatus('已清空完成记录')
 }
 
 function resetView() {
@@ -641,6 +751,7 @@ function handleKeydown(event) {
     previewImage.value = ''
     editorFormOpen.value = false
     selectedLocation.value = null
+    clearCompletedConfirming.value = false
     searchInput.value?.blur()
   }
 }
@@ -651,6 +762,11 @@ watch(filteredLocations, (visibleLocations) => {
     selectedLocation.value = null
   }
 })
+watch(activeDistricts, async () => {
+  await nextTick()
+  const focusLocations = filteredLocations.value.filter((location) => !isTeleportLocation(location))
+  fitLocationsBounds(focusLocations.length ? focusLocations : filteredLocations.value)
+}, { deep: true })
 watch(activeRouteId, () => nextTick(renderRouteArrows))
 watch([() => [...activeCategories.value], keepTeleportEnabled, showIncompleteOnly], persistMarkerFilters)
 
@@ -711,19 +827,21 @@ onUnmounted(() => {
     <div ref="mapElement" class="map-canvas" />
 
     <header class="topbar glass-panel">
-      <div class="brand-block">
+      <div class="brand-block topbar-brand">
         <img class="brand-mark" :src="publicAssetUrl('/logo.png')" alt="MaaNTE" />
         <div>
           <p class="eyebrow">MaaNTE Map</p>
           <h1>MaaNTE在线地图工具</h1>
         </div>
       </div>
-      <label class="search-box">
+      <div class="topbar-search">
+        <label class="search-box">
         <span class="search-icon">⌕</span>
         <input ref="searchInput" v-model="query" type="search" placeholder="搜索地点、区域或关键词..." />
         <kbd>/</kbd>
-      </label>
-      <div class="toolbar">
+        </label>
+      </div>
+      <div class="toolbar topbar-tools">
         <button :class="{ 'toolbar-button--active': editorMode }" type="button" @click="editorMode = !editorMode">
           {{ editorMode ? '编辑已开启' : '编辑地图' }}
         </button>
@@ -733,7 +851,17 @@ onUnmounted(() => {
         <div class="progress-block">
           <div class="progress-copy"><span>探索进度</span><strong>{{ progress }}%</strong></div>
           <div class="progress-track"><i :style="{ width: `${progress}%` }" /></div>
-          <small>{{ completedCount }} / {{ visibleLocationIds.size }} 已完成</small>
+          <div class="progress-footer">
+            <small>{{ completedCount }} / {{ visibleLocationIds.size }} 已完成</small>
+            <button v-if="!clearCompletedConfirming" type="button" class="text-button progress-clear-button" :disabled="!completedIds.size" @click="beginClearCompleted">清空</button>
+          </div>
+          <div v-if="clearCompletedConfirming" class="progress-confirm-popover glass-panel">
+            <span class="progress-confirm-copy">确认清空？</span>
+            <div class="progress-confirm-actions">
+              <button type="button" class="progress-action-button progress-action-button--danger" @click="clearCompleted">确认</button>
+              <button type="button" class="progress-action-button" @click="cancelClearCompleted">取消</button>
+            </div>
+          </div>
         </div>
       </div>
     </header>
@@ -752,18 +880,76 @@ onUnmounted(() => {
         </div>
         <div class="category-list">
           <template v-for="group in groupedCategories" :key="group.label">
-            <p class="category-group">{{ group.label }}</p>
-            <button v-for="category in group.categories" :key="category.id" class="category-button"
-              :class="{ 'category-button--muted': !activeCategories.has(category.id) }" type="button" @click="toggleCategory(category.id)">
-              <span class="category-icon" :style="{ '--category-color': category.color }">
-                <img v-if="category.iconUrl" :src="publicAssetUrl(category.iconUrl)" alt="" />
-                <template v-else>{{ category.icon }}</template>
-              </span>
-              <span>{{ category.label }}</span><small>{{ visibleCounts[category.id] }}</small>
-            </button>
+            <div class="category-group-block" :class="{ 'category-group-block--collapsed': isCategoryGroupCollapsed(group.label) }">
+              <button
+                v-if="collapsibleGroupLabels.has(group.label)"
+                class="category-group-toggle"
+                type="button"
+                @click="toggleCategoryGroup(group.label)"
+              >
+                <span class="category-group-heading">
+                  <span class="category-group-title">{{ group.label }}</span>
+                </span>
+                <span class="category-group-meta">
+                  <button
+                    class="category-select-all category-select-all--inline"
+                    :class="{
+                      'category-select-all--active': isGroupFullySelected(group),
+                      'category-select-all--partial': isGroupPartiallySelected(group),
+                    }"
+                    type="button"
+                    :aria-checked="isGroupFullySelected(group) ? 'true' : isGroupPartiallySelected(group) ? 'mixed' : 'false'"
+                    role="checkbox"
+                    @click.stop="toggleCategoryGroupSelection(group)"
+                  >
+                    <span>全选</span>
+                    <span class="category-select-all__box" aria-hidden="true">
+                      <i v-if="isGroupFullySelected(group)" class="category-select-all__check" />
+                      <i v-else-if="isGroupPartiallySelected(group)" class="category-select-all__dash" />
+                    </span>
+                  </button>
+                  <small>{{ group.categories.length }}</small>
+                  <i>{{ isCategoryGroupCollapsed(group.label) ? '▸' : '▾' }}</i>
+                </span>
+              </button>
+              <p v-else class="category-group">{{ group.label }}</p>
+              <div v-show="!isCategoryGroupCollapsed(group.label)" class="category-group-items">
+                <button v-for="category in group.categories" :key="category.id" class="category-button"
+                  :class="{ 'category-button--muted': !activeCategories.has(category.id) }" type="button" @click="toggleCategory(category.id)">
+                  <span class="category-icon" :style="{ '--category-color': category.color }">
+                    <img v-if="category.iconUrl" :src="publicAssetUrl(category.iconUrl)" alt="" />
+                    <template v-else>{{ category.icon }}</template>
+                  </span>
+                  <span>{{ category.label }}</span><small>{{ visibleCounts[category.id] }}</small>
+                </button>
+              </div>
+            </div>
           </template>
         </div>
         <div class="sidebar-footer">
+          <div class="sidebar-expander">
+            <button class="sidebar-expander__toggle" type="button" @click="districtFilterOpen = !districtFilterOpen">
+              <span><b>区域筛选</b><small>{{ hasActiveDistricts ? `${activeDistricts.size} 项已选` : '按区域筛选点位' }}</small></span>
+              <i>{{ districtFilterOpen ? '▾' : '▸' }}</i>
+            </button>
+            <div v-show="districtFilterOpen" class="sidebar-expander__body">
+              <div class="district-list">
+                <button
+                  v-for="district in districtOptions"
+                  :key="district"
+                  class="district-button"
+                  :class="{ 'district-button--active': activeDistricts.has(district) }"
+                  type="button"
+                  @click="toggleDistrict(district)"
+                >
+                  {{ district }}
+                </button>
+              </div>
+              <div v-if="hasActiveDistricts" class="sidebar-expander__actions">
+                <button type="button" class="text-button" @click="clearDistricts">清空区域</button>
+              </div>
+            </div>
+          </div>
           <label class="switch-row">
             <span><b>传送点保持开启</b><small>清空分类时仍显示传送点</small></span>
             <input :checked="keepTeleportEnabled" type="checkbox" @change="toggleTeleportProtection" /><i />
