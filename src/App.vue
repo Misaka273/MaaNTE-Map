@@ -28,7 +28,7 @@ const INITIAL_ZOOM = -3
 const MIN_ZOOM = -3
 const MARKER_FILTERS_STORAGE_KEY = 'nte-marker-filters'
 const ROUTES_STORAGE_KEY = 'nte-routes'
-const NAVIGATION_WEBSOCKET_URL = import.meta.env.VITE_MAANTE_NAVI_WEBSOCKET_URL || 'ws://127.0.0.1:8765'
+const DEFAULT_NAVIGATION_WEBSOCKET_URL = import.meta.env.VITE_MAANTE_NAVI_WEBSOCKET_URL || 'ws://127.0.0.1:8765'
 const NAVIGATION_RECONNECT_DELAY = 2000
 const NAVIGATION_CENTER_TOLERANCE_PX = 28
 const NAVIGATION_CENTER_SMOOTHING = 0.18
@@ -66,6 +66,29 @@ function readStoredMapView() {
 
   if (![lat, lng, zoom].every(Number.isFinite)) return null
   return { lat, lng, zoom }
+}
+
+function parseNavigationWebSocketUrl(url) {
+  try {
+    const parsed = new URL(url)
+    return {
+      host: parsed.hostname || '127.0.0.1',
+      port: parsed.port || '8765',
+    }
+  } catch {
+    return { host: '127.0.0.1', port: '8765' }
+  }
+}
+
+function normalizeNavigationHost(value) {
+  return String(value || '').trim() || parseNavigationWebSocketUrl(DEFAULT_NAVIGATION_WEBSOCKET_URL).host
+}
+
+function normalizeNavigationPort(value) {
+  const port = Number(String(value || '').trim())
+  return Number.isInteger(port) && port >= 1 && port <= 65535
+    ? String(port)
+    : parseNavigationWebSocketUrl(DEFAULT_NAVIGATION_WEBSOCKET_URL).port
 }
 
 function getInitialCategories() {
@@ -121,6 +144,9 @@ const favoriteIds = ref(readStoredIds('nte-favorites'))
 const showIncompleteOnly = ref(storedMarkerFilters?.showIncompleteOnly === true)
 const realtimeNavigationEnabled = ref(storedMarkerFilters?.realtimeNavigationEnabled === true)
 const centerNavigationEnabled = ref(storedMarkerFilters?.centerNavigationEnabled === true)
+const defaultNavigationEndpoint = parseNavigationWebSocketUrl(DEFAULT_NAVIGATION_WEBSOCKET_URL)
+const navigationHost = ref(normalizeNavigationHost(storedMarkerFilters?.navigationHost || defaultNavigationEndpoint.host))
+const navigationPort = ref(normalizeNavigationPort(storedMarkerFilters?.navigationPort || defaultNavigationEndpoint.port))
 const coordinates = ref({ lat: 0, lng: 0 })
 const sidebarCollapsed = ref(false)
 const districtFilterOpen = ref(storedMarkerFilters?.districtFilterOpen === true)
@@ -151,6 +177,7 @@ const navigationConnectionLabel = computed(() => ({
   connecting: 'CONNECTING',
   disconnected: 'OFFLINE',
 })[navigationConnectionStatus.value])
+const navigationWebSocketUrl = computed(() => `ws://${normalizeNavigationHost(navigationHost.value)}:${normalizeNavigationPort(navigationPort.value)}`)
 
 const emptyLocationForm = () => ({
   name: '',
@@ -254,6 +281,8 @@ function restoreMarkerFilters() {
   showIncompleteOnly.value = storedFilters?.showIncompleteOnly === true
   realtimeNavigationEnabled.value = storedFilters?.realtimeNavigationEnabled === true
   centerNavigationEnabled.value = storedFilters?.centerNavigationEnabled === true
+  navigationHost.value = normalizeNavigationHost(storedFilters?.navigationHost || defaultNavigationEndpoint.host)
+  navigationPort.value = normalizeNavigationPort(storedFilters?.navigationPort || defaultNavigationEndpoint.port)
 
   if (Array.isArray(storedFilters?.activeCategories)) {
     const nextCategories = new Set(storedFilters.activeCategories.filter((id) => validCategoryIds.has(id)))
@@ -295,6 +324,8 @@ function persistMarkerFilters() {
     showIncompleteOnly: showIncompleteOnly.value,
     realtimeNavigationEnabled: realtimeNavigationEnabled.value,
     centerNavigationEnabled: centerNavigationEnabled.value,
+    navigationHost: normalizeNavigationHost(navigationHost.value),
+    navigationPort: normalizeNavigationPort(navigationPort.value),
     districtFilterOpen: districtFilterOpen.value,
     collapsedCategoryGroups: Object.fromEntries(
       [...collapsibleGroupLabels].map((label) => [label, Boolean(collapsedCategoryGroups.value[label])]),
@@ -714,7 +745,7 @@ function disconnectNavigationSocket() {
 function connectNavigationSocket() {
   if (navigationClientStopped || !realtimeNavigationEnabled.value || navigationSocket) return
   navigationConnection.value = 'connecting'
-  const socket = new WebSocket(NAVIGATION_WEBSOCKET_URL)
+  const socket = new WebSocket(navigationWebSocketUrl.value)
   navigationSocket = socket
   socket.addEventListener('open', () => {
     if (navigationSocket === socket) navigationConnection.value = 'connected'
@@ -727,6 +758,16 @@ function connectNavigationSocket() {
     scheduleNavigationReconnect()
   })
   socket.addEventListener('error', () => socket.close())
+}
+
+function applyNavigationEndpoint() {
+  navigationHost.value = normalizeNavigationHost(navigationHost.value)
+  navigationPort.value = normalizeNavigationPort(navigationPort.value)
+  persistMarkerFilters()
+  if (realtimeNavigationEnabled.value) {
+    disconnectNavigationSocket()
+    connectNavigationSocket()
+  }
 }
 
 function focusSegment(segment) {
@@ -1078,7 +1119,10 @@ watch([() => [...activeCategories.value], keepTeleportEnabled, showIncompleteOnl
 watch(realtimeNavigationEnabled, () => {
   persistMarkerFilters()
   if (realtimeNavigationEnabled.value) connectNavigationSocket()
-  else disconnectNavigationSocket()
+  else {
+    centerNavigationEnabled.value = false
+    disconnectNavigationSocket()
+  }
 })
 watch(centerNavigationEnabled, () => {
   persistMarkerFilters()
@@ -1288,10 +1332,23 @@ onUnmounted(() => {
             <span><b>实时定位</b><small>开启后监听本地导航数据</small></span>
             <input v-model="realtimeNavigationEnabled" type="checkbox" /><i />
           </label>
-          <label class="switch-row">
+          <label v-if="realtimeNavigationEnabled" class="switch-row">
             <span><b>箭头保持居中</b><small>自动将导航箭头保持在窗口中心</small></span>
             <input v-model="centerNavigationEnabled" type="checkbox" /><i />
           </label>
+          <div v-if="realtimeNavigationEnabled" class="navigation-endpoint-row">
+            <span><b>监听地址</b><small>{{ navigationWebSocketUrl }}</small></span>
+            <div class="navigation-endpoint-fields">
+              <label>
+                <span>IP</span>
+                <input v-model.trim="navigationHost" type="text" inputmode="url" autocomplete="off" @change="applyNavigationEndpoint" />
+              </label>
+              <label>
+                <span>端口</span>
+                <input v-model.trim="navigationPort" type="number" min="1" max="65535" step="1" inputmode="numeric" @change="applyNavigationEndpoint" />
+              </label>
+            </div>
+          </div>
           <div class="filter-summary">{{ filteredLocations.length }} 个标记显示中</div>
         </div>
       </div>
