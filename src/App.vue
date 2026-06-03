@@ -30,6 +30,9 @@ const MARKER_FILTERS_STORAGE_KEY = 'nte-marker-filters'
 const ROUTES_STORAGE_KEY = 'nte-routes'
 const NAVIGATION_WEBSOCKET_URL = import.meta.env.VITE_MAANTE_NAVI_WEBSOCKET_URL || 'ws://127.0.0.1:8765'
 const NAVIGATION_RECONNECT_DELAY = 2000
+const NAVIGATION_CENTER_TOLERANCE_PX = 28
+const NAVIGATION_CENTER_SMOOTHING = 0.18
+const NAVIGATION_CENTER_MAX_STEP_PX = 48
 const DEFAULT_COLLAPSED_CATEGORY_GROUPS = {
   探索度: false,
   传送点: false,
@@ -116,6 +119,7 @@ const selectedLocation = ref(null)
 const completedIds = ref(readStoredIds('nte-completed'))
 const favoriteIds = ref(readStoredIds('nte-favorites'))
 const showIncompleteOnly = ref(storedMarkerFilters?.showIncompleteOnly === true)
+const centerNavigationEnabled = ref(storedMarkerFilters?.centerNavigationEnabled === true)
 const coordinates = ref({ lat: 0, lng: 0 })
 const sidebarCollapsed = ref(false)
 const districtFilterOpen = ref(storedMarkerFilters?.districtFilterOpen === true)
@@ -170,6 +174,8 @@ let navigationSocket
 let navigationReconnectTimer
 let navigationClientStopped = false
 let navigationDisplayAngle = null
+let navigationFollowFrame = 0
+let navigationFollowLatLng = null
 let districtAutoFitReady = false
 let mapViewPersistenceReady = false
 let skipNextDistrictAutoFit = false
@@ -241,6 +247,7 @@ function restoreMarkerFilters() {
     ? storedFilters.keepTeleportEnabled
     : true
   showIncompleteOnly.value = storedFilters?.showIncompleteOnly === true
+  centerNavigationEnabled.value = storedFilters?.centerNavigationEnabled === true
 
   if (Array.isArray(storedFilters?.activeCategories)) {
     const nextCategories = new Set(storedFilters.activeCategories.filter((id) => validCategoryIds.has(id)))
@@ -280,6 +287,7 @@ function persistMarkerFilters() {
     activeDistricts: [...activeDistricts.value],
     keepTeleportEnabled: keepTeleportEnabled.value,
     showIncompleteOnly: showIncompleteOnly.value,
+    centerNavigationEnabled: centerNavigationEnabled.value,
     districtFilterOpen: districtFilterOpen.value,
     collapsedCategoryGroups: Object.fromEntries(
       [...collapsibleGroupLabels].map((label) => [label, Boolean(collapsedCategoryGroups.value[label])]),
@@ -289,6 +297,7 @@ function persistMarkerFilters() {
 
 function persistMapView() {
   if (!map || !mapViewPersistenceReady) return
+  if (navigationFollowFrame) return
 
   const center = map.getCenter()
   const storedFilters = readStoredMarkerFilters()
@@ -568,21 +577,66 @@ function updateNavigationMarkerAngle(angle) {
   if (image) image.style.transform = `rotate(${navigationDisplayAngle}deg)`
 }
 
+function stopNavigationFollow(persist = true) {
+  if (navigationFollowFrame) {
+    window.cancelAnimationFrame(navigationFollowFrame)
+    navigationFollowFrame = 0
+  }
+  navigationFollowLatLng = null
+  if (persist) persistMapView()
+}
+
+function stepNavigationFollow() {
+  if (!centerNavigationEnabled.value || !map || !navigationFollowLatLng) {
+    stopNavigationFollow(false)
+    return
+  }
+
+  const size = map.getSize()
+  const centerPoint = L.point(size.x / 2, size.y / 2)
+  const targetPoint = map.latLngToContainerPoint(navigationFollowLatLng)
+  const delta = targetPoint.subtract(centerPoint)
+  const distance = Math.sqrt(delta.x ** 2 + delta.y ** 2)
+
+  if (distance <= NAVIGATION_CENTER_TOLERANCE_PX) {
+    stopNavigationFollow()
+    return
+  }
+
+  const stepDistance = Math.min(
+    (distance - NAVIGATION_CENTER_TOLERANCE_PX) * NAVIGATION_CENTER_SMOOTHING,
+    NAVIGATION_CENTER_MAX_STEP_PX,
+  )
+  map.panBy(delta.multiplyBy(stepDistance / distance), { animate: false })
+  navigationFollowFrame = window.requestAnimationFrame(stepNavigationFollow)
+}
+
+function centerNavigationMarker(latlng) {
+  if (!centerNavigationEnabled.value || !map || !latlng) return
+  navigationFollowLatLng = latlng
+  if (!navigationFollowFrame) {
+    navigationFollowFrame = window.requestAnimationFrame(stepNavigationFollow)
+  }
+}
+
 function renderNavigationArrow() {
   if (!map || !navigationState.value.position) {
     navigationMarker?.setOpacity(0)
+    stopNavigationFollow()
     return
   }
+  const latlng = mapPixelToMapLatLng(navigationState.value.position)
   if (!navigationMarker) {
-    navigationMarker = L.marker(mapPixelToMapLatLng(navigationState.value.position), {
+    navigationMarker = L.marker(latlng, {
       icon: createNavigationIcon(),
       interactive: false,
       keyboard: false,
       zIndexOffset: 1000000,
     }).addTo(map)
   }
-  navigationMarker.setLatLng(mapPixelToMapLatLng(navigationState.value.position))
+  navigationMarker.setLatLng(latlng)
   navigationMarker.setOpacity(1)
+  centerNavigationMarker(latlng)
   const arrow = navigationMarker.getElement()?.querySelector('.navigation-arrow')
   if (arrow) {
     arrow.classList.toggle('navigation-arrow--angle-missing', navigationState.value.angle === null)
@@ -989,6 +1043,11 @@ watch(activeDistricts, async () => {
 watch(activeDistricts, persistMarkerFilters, { deep: true })
 watch(activeRouteId, () => nextTick(renderRouteArrows))
 watch([() => [...activeCategories.value], keepTeleportEnabled, showIncompleteOnly], persistMarkerFilters)
+watch(centerNavigationEnabled, () => {
+  persistMarkerFilters()
+  if (!centerNavigationEnabled.value) stopNavigationFollow()
+  renderNavigationArrow()
+})
 watch(districtFilterOpen, persistMarkerFilters)
 watch(collapsedCategoryGroups, persistMarkerFilters, { deep: true })
 
@@ -1045,6 +1104,7 @@ onUnmounted(() => {
   navigationClientStopped = true
   if (navigationReconnectTimer) window.clearTimeout(navigationReconnectTimer)
   navigationSocket?.close()
+  stopNavigationFollow(false)
   navigationMarker?.remove()
   window.removeEventListener('keydown', handleKeydown)
   map?.remove()
@@ -1186,6 +1246,10 @@ onUnmounted(() => {
           <label class="switch-row">
             <span><b>仅显示未完成</b><small>隐藏已经探索的标记</small></span>
             <input v-model="showIncompleteOnly" type="checkbox" /><i />
+          </label>
+          <label class="switch-row">
+            <span><b>箭头保持居中</b><small>自动将导航箭头保持在窗口中心</small></span>
+            <input v-model="centerNavigationEnabled" type="checkbox" /><i />
           </label>
           <div class="filter-summary">{{ filteredLocations.length }} 个标记显示中</div>
         </div>
