@@ -118,6 +118,9 @@ const initialTeleportCategoryIds = new Set(
 const initialKeepTeleportEnabled = typeof storedMarkerFilters?.keepTeleportEnabled === 'boolean'
   ? storedMarkerFilters.keepTeleportEnabled
   : true
+const initialMergeAdjacentLocationsEnabled = typeof storedMarkerFilters?.mergeAdjacentLocationsEnabled === 'boolean'
+  ? storedMarkerFilters.mergeAdjacentLocationsEnabled
+  : true
 const initialActiveCategories = (() => {
   if (!Array.isArray(storedMarkerFilters?.activeCategories)) return initialCategoryIds
   const nextCategories = new Set(storedMarkerFilters.activeCategories.filter((id) => initialCategoryIds.has(id)))
@@ -138,6 +141,7 @@ const initialCollapsedCategoryGroups = {
 const activeCategories = ref(initialActiveCategories)
 const activeDistricts = ref(initialActiveDistricts)
 const keepTeleportEnabled = ref(initialKeepTeleportEnabled)
+const mergeAdjacentLocationsEnabled = ref(initialMergeAdjacentLocationsEnabled)
 const selectedLocation = ref(null)
 const completedIds = ref(readStoredIds('nte-completed'))
 const favoriteIds = ref(readStoredIds('nte-favorites'))
@@ -278,6 +282,9 @@ function restoreMarkerFilters() {
   keepTeleportEnabled.value = typeof storedFilters?.keepTeleportEnabled === 'boolean'
     ? storedFilters.keepTeleportEnabled
     : true
+  mergeAdjacentLocationsEnabled.value = typeof storedFilters?.mergeAdjacentLocationsEnabled === 'boolean'
+    ? storedFilters.mergeAdjacentLocationsEnabled
+    : true
   showIncompleteOnly.value = storedFilters?.showIncompleteOnly === true
   realtimeNavigationEnabled.value = storedFilters?.realtimeNavigationEnabled === true
   centerNavigationEnabled.value = storedFilters?.centerNavigationEnabled === true
@@ -321,6 +328,7 @@ function persistMarkerFilters() {
     activeCategories: [...activeCategories.value],
     activeDistricts: [...activeDistricts.value],
     keepTeleportEnabled: keepTeleportEnabled.value,
+    mergeAdjacentLocationsEnabled: mergeAdjacentLocationsEnabled.value,
     showIncompleteOnly: showIncompleteOnly.value,
     realtimeNavigationEnabled: realtimeNavigationEnabled.value,
     centerNavigationEnabled: centerNavigationEnabled.value,
@@ -428,6 +436,25 @@ function createIcon(location) {
     iconSize: [36, 44],
     iconAnchor: [18, 42],
   })
+}
+
+function createMarkerLayer() {
+  return mergeAdjacentLocationsEnabled.value
+    ? L.markerClusterGroup({
+        chunkedLoading: true,
+        maxClusterRadius: 52,
+        disableClusteringAtZoom: 0,
+        showCoverageOnHover: false,
+      })
+    : L.layerGroup()
+}
+
+function rebuildMarkerLayer() {
+  if (!map) return
+  markerLayer?.clearLayers()
+  markerLayer?.remove()
+  markerLayer = createMarkerLayer().addTo(map)
+  renderMarkers()
 }
 
 function selectLocation(location, fly = true) {
@@ -1116,6 +1143,10 @@ watch(activeDistricts, async () => {
 watch(activeDistricts, persistMarkerFilters, { deep: true })
 watch(activeRouteId, () => nextTick(renderRouteArrows))
 watch([() => [...activeCategories.value], keepTeleportEnabled, showIncompleteOnly], persistMarkerFilters)
+watch(mergeAdjacentLocationsEnabled, () => {
+  persistMarkerFilters()
+  rebuildMarkerLayer()
+})
 watch(realtimeNavigationEnabled, () => {
   persistMarkerFilters()
   if (realtimeNavigationEnabled.value) connectNavigationSocket()
@@ -1155,12 +1186,7 @@ onMounted(async () => {
     keepBuffer: 3,
   }).addTo(map)
   L.control.zoom({ position: 'bottomright' }).addTo(map)
-  markerLayer = L.markerClusterGroup({
-    chunkedLoading: true,
-    maxClusterRadius: 52,
-    disableClusteringAtZoom: 0,
-    showCoverageOnHover: false,
-  }).addTo(map)
+  markerLayer = createMarkerLayer().addTo(map)
   arrowLayer = L.layerGroup().addTo(map)
   map.on('mousemove', ({ latlng }) => { coordinates.value = mapLatLngToWorld(latlng) })
   map.on('click', ({ latlng }) => {
@@ -1323,6 +1349,10 @@ onUnmounted(() => {
           <label class="switch-row">
             <span><b>传送点保持开启</b><small>清空分类时仍显示传送点</small></span>
             <input :checked="keepTeleportEnabled" type="checkbox" @change="toggleTeleportProtection" /><i />
+          </label>
+          <label class="switch-row">
+            <span><b>合并相邻点位</b><small>开启后邻近标记会聚合显示</small></span>
+            <input v-model="mergeAdjacentLocationsEnabled" type="checkbox" /><i />
           </label>
           <label class="switch-row">
             <span><b>仅显示未完成</b><small>隐藏已经探索的标记</small></span>
