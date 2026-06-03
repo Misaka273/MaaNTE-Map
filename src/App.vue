@@ -119,6 +119,7 @@ const selectedLocation = ref(null)
 const completedIds = ref(readStoredIds('nte-completed'))
 const favoriteIds = ref(readStoredIds('nte-favorites'))
 const showIncompleteOnly = ref(storedMarkerFilters?.showIncompleteOnly === true)
+const realtimeNavigationEnabled = ref(storedMarkerFilters?.realtimeNavigationEnabled === true)
 const centerNavigationEnabled = ref(storedMarkerFilters?.centerNavigationEnabled === true)
 const coordinates = ref({ lat: 0, lng: 0 })
 const sidebarCollapsed = ref(false)
@@ -141,11 +142,15 @@ const navigationState = ref({
   angle: null,
   angleConfidence: 0,
 })
+const navigationConnectionStatus = computed(() =>
+  realtimeNavigationEnabled.value ? navigationConnection.value : 'disabled',
+)
 const navigationConnectionLabel = computed(() => ({
+  disabled: 'OFF',
   connected: 'CONNECTED',
   connecting: 'CONNECTING',
   disconnected: 'OFFLINE',
-})[navigationConnection.value])
+})[navigationConnectionStatus.value])
 
 const emptyLocationForm = () => ({
   name: '',
@@ -247,6 +252,7 @@ function restoreMarkerFilters() {
     ? storedFilters.keepTeleportEnabled
     : true
   showIncompleteOnly.value = storedFilters?.showIncompleteOnly === true
+  realtimeNavigationEnabled.value = storedFilters?.realtimeNavigationEnabled === true
   centerNavigationEnabled.value = storedFilters?.centerNavigationEnabled === true
 
   if (Array.isArray(storedFilters?.activeCategories)) {
@@ -287,6 +293,7 @@ function persistMarkerFilters() {
     activeDistricts: [...activeDistricts.value],
     keepTeleportEnabled: keepTeleportEnabled.value,
     showIncompleteOnly: showIncompleteOnly.value,
+    realtimeNavigationEnabled: realtimeNavigationEnabled.value,
     centerNavigationEnabled: centerNavigationEnabled.value,
     districtFilterOpen: districtFilterOpen.value,
     collapsedCategoryGroups: Object.fromEntries(
@@ -644,6 +651,16 @@ function renderNavigationArrow() {
   updateNavigationMarkerAngle(navigationState.value.angle)
 }
 
+function clearNavigationState() {
+  navigationState.value = {
+    position: null,
+    angle: null,
+    angleConfidence: 0,
+  }
+  navigationDisplayAngle = null
+  renderNavigationArrow()
+}
+
 function handleNavigationMessage(event) {
   try {
     const payload = JSON.parse(event.data)
@@ -672,15 +689,30 @@ function handleNavigationMessage(event) {
 }
 
 function scheduleNavigationReconnect() {
-  if (navigationClientStopped || navigationReconnectTimer) return
+  if (navigationClientStopped || !realtimeNavigationEnabled.value || navigationReconnectTimer) return
   navigationReconnectTimer = window.setTimeout(() => {
     navigationReconnectTimer = null
     connectNavigationSocket()
   }, NAVIGATION_RECONNECT_DELAY)
 }
 
+function disconnectNavigationSocket() {
+  if (navigationReconnectTimer) {
+    window.clearTimeout(navigationReconnectTimer)
+    navigationReconnectTimer = null
+  }
+  const socket = navigationSocket
+  navigationSocket = null
+  if (socket) {
+    socket.removeEventListener('message', handleNavigationMessage)
+    socket.close()
+  }
+  navigationConnection.value = 'disconnected'
+  clearNavigationState()
+}
+
 function connectNavigationSocket() {
-  if (navigationClientStopped || navigationSocket) return
+  if (navigationClientStopped || !realtimeNavigationEnabled.value || navigationSocket) return
   navigationConnection.value = 'connecting'
   const socket = new WebSocket(NAVIGATION_WEBSOCKET_URL)
   navigationSocket = socket
@@ -1043,6 +1075,11 @@ watch(activeDistricts, async () => {
 watch(activeDistricts, persistMarkerFilters, { deep: true })
 watch(activeRouteId, () => nextTick(renderRouteArrows))
 watch([() => [...activeCategories.value], keepTeleportEnabled, showIncompleteOnly], persistMarkerFilters)
+watch(realtimeNavigationEnabled, () => {
+  persistMarkerFilters()
+  if (realtimeNavigationEnabled.value) connectNavigationSocket()
+  else disconnectNavigationSocket()
+})
 watch(centerNavigationEnabled, () => {
   persistMarkerFilters()
   if (!centerNavigationEnabled.value) stopNavigationFollow()
@@ -1096,7 +1133,7 @@ onMounted(async () => {
   mapViewPersistenceReady = true
   persistMapView()
   districtAutoFitReady = true
-  connectNavigationSocket()
+  if (realtimeNavigationEnabled.value) connectNavigationSocket()
   window.addEventListener('keydown', handleKeydown)
 })
 
@@ -1248,6 +1285,10 @@ onUnmounted(() => {
             <input v-model="showIncompleteOnly" type="checkbox" /><i />
           </label>
           <label class="switch-row">
+            <span><b>实时定位</b><small>开启后监听本地导航数据</small></span>
+            <input v-model="realtimeNavigationEnabled" type="checkbox" /><i />
+          </label>
+          <label class="switch-row">
             <span><b>箭头保持居中</b><small>自动将导航箭头保持在窗口中心</small></span>
             <input v-model="centerNavigationEnabled" type="checkbox" /><i />
           </label>
@@ -1325,7 +1366,7 @@ onUnmounted(() => {
     <div class="map-hud glass-panel">
       <button type="button" @click="resetView">重置视野</button>
       <span>LAT {{ coordinates.lat.toFixed(2) }}</span><span>LNG {{ coordinates.lng.toFixed(2) }}</span>
-      <span class="navigation-status" :class="`navigation-status--${navigationConnection}`">NAVI {{ navigationConnectionLabel }}</span>
+      <span class="navigation-status" :class="`navigation-status--${navigationConnectionStatus}`">NAVI {{ navigationConnectionLabel }}</span>
       <span v-if="navigationState.position">POS {{ navigationState.position.pixelX.toFixed(0) }}, {{ navigationState.position.pixelY.toFixed(0) }}</span>
       <span v-if="navigationState.angle !== null">ANGLE {{ navigationState.angle.toFixed(1) }}°</span>
     </div>
