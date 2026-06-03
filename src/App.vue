@@ -722,7 +722,7 @@ function clearNavigationState() {
 function handleNavigationMessage(event) {
   try {
     const payload = JSON.parse(event.data)
-    if (payload.type !== 'maan-nav-state' || payload.version !== 1) return
+    if (payload.type !== 'navi-state' || payload.version !== 1) return
     const pixelX = Number(payload.position?.pixelX)
     const pixelY = Number(payload.position?.pixelY)
     const sourceWidth = Number(payload.position?.sourceWidth)
