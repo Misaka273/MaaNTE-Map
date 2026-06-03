@@ -1636,19 +1636,32 @@ kbd {
 /* Keep interface chrome monochrome; marker accents remain category-specific. */
 .sidebar-content {
   min-height: 0;
+  overflow: hidden;
 }
 
 .category-list {
   min-height: 0;
   max-height: none;
-  flex: 1 1 auto;
+  flex: 1 1 180px;
   margin: 16px 0 12px;
   overflow-y: auto;
 }
 
 .sidebar-footer {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  max-height: min(390px, 46%);
   margin-top: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.sidebar-footer::-webkit-scrollbar {
+  width: 3px;
+}
+
+.sidebar-footer::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  background: rgba(117, 196, 186, 0.36);
 }
 
 .category-button {
@@ -1697,6 +1710,23 @@ kbd {
 .switch-row input:checked + i {
   border-color: #fff;
   background: rgba(255, 255, 255, 0.34);
+}
+
+@media (max-height: 760px) {
+  .category-list {
+    flex-basis: 220px;
+  }
+
+  .sidebar-footer {
+    max-height: 30%;
+  }
+
+  .switch-row,
+  .sidebar-expander__toggle,
+  .navigation-endpoint-row {
+    padding-top: 9px;
+    padding-bottom: 11px;
+  }
 }
 
 .leaflet-bar {
