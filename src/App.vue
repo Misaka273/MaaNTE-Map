@@ -28,6 +28,8 @@ const INITIAL_ZOOM = -3
 const MIN_ZOOM = -3
 const MARKER_FILTERS_STORAGE_KEY = 'nte-marker-filters'
 const ROUTES_STORAGE_KEY = 'nte-routes'
+const COMPLETED_STORAGE_KEY = 'nte-completed'
+const isLocalEditor = import.meta.env.DEV
 const DEFAULT_NAVIGATION_WEBSOCKET_URL = import.meta.env.VITE_MAANTE_NAVI_WEBSOCKET_URL || 'ws://127.0.0.1:8765'
 const NAVIGATION_RECONNECT_DELAY = 2000
 const NAVIGATION_CENTER_TOLERANCE_PX = 28
@@ -143,8 +145,15 @@ const activeDistricts = ref(initialActiveDistricts)
 const keepTeleportEnabled = ref(initialKeepTeleportEnabled)
 const mergeAdjacentLocationsEnabled = ref(initialMergeAdjacentLocationsEnabled)
 const selectedLocation = ref(null)
-const completedIds = ref(readStoredIds('nte-completed'))
+const completedIds = ref(readStoredIds(COMPLETED_STORAGE_KEY))
 const favoriteIds = ref(readStoredIds('nte-favorites'))
+const pendingLocationChanges = ref({
+  categories: [],
+  upsertLocations: [],
+  deletedLocationIds: [],
+})
+const sessionCreatedLocationIds = new Set()
+const sessionCreatedCategoryIds = new Set()
 const showIncompleteOnly = ref(storedMarkerFilters?.showIncompleteOnly === true)
 const realtimeNavigationEnabled = ref(storedMarkerFilters?.realtimeNavigationEnabled === true)
 const centerNavigationEnabled = ref(storedMarkerFilters?.centerNavigationEnabled === true)
@@ -165,6 +174,8 @@ const activeRouteId = ref(null)
 const isAddingSegment = ref(false)
 const segmentPoints = ref([])
 const routeImportInput = ref(null)
+const completedImportInput = ref(null)
+const locationChangesImportInput = ref(null)
 const collapsedCategoryGroups = ref(initialCollapsedCategoryGroups)
 const navigationConnection = ref('disconnected')
 const navigationState = ref({
@@ -226,6 +237,9 @@ const visibleLocationIds = computed(() => new Set(
 ))
 const completedCount = computed(() => [...completedIds.value].filter((id) => visibleLocationIds.value.has(id)).length)
 const progress = computed(() => Math.round((completedCount.value / Math.max(visibleLocationIds.value.size, 1)) * 100))
+const pendingLocationChangeCount = computed(() => (
+  pendingLocationChanges.value.upsertLocations.length + pendingLocationChanges.value.deletedLocationIds.length
+))
 const districtOptions = computed(() => {
   const districts = [...new Set(locations.value.map((location) => normalizeDistrictLabel(location.district)).filter(Boolean))]
   return districts.sort((left, right) => {
@@ -235,6 +249,20 @@ const districtOptions = computed(() => {
   })
 })
 const hasActiveDistricts = computed(() => activeDistricts.value.size > 0)
+const bulkCompleteCategoryIds = computed(() => (
+  [...activeCategories.value].filter((id) => !teleportCategoryIds.value.includes(id))
+))
+const bulkCompleteLocations = computed(() => {
+  if (!activeDistricts.value.size || !bulkCompleteCategoryIds.value.length) return []
+  const selectedCategoryIds = new Set(bulkCompleteCategoryIds.value)
+  return locations.value.filter((location) => (
+    activeDistricts.value.has(normalizeDistrictLabel(location.district))
+    && location.types.some((type) => selectedCategoryIds.has(type))
+  ))
+})
+const bulkIncompleteCount = computed(() => (
+  bulkCompleteLocations.value.filter((location) => !completedIds.value.has(location.id)).length
+))
 
 const filteredLocations = computed(() => {
   const keyword = query.value.trim().toLowerCase()
@@ -378,7 +406,19 @@ function persistRoutesLocally() {
   localStorage.setItem(ROUTES_STORAGE_KEY, JSON.stringify(routes.value))
 }
 
+function downloadJson(payload, filename) {
+  const blobUrl = URL.createObjectURL(new Blob([`${JSON.stringify(payload, null, 2)}\n`], { type: 'application/json' }))
+  const link = document.createElement('a')
+  link.href = blobUrl
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  window.setTimeout(() => URL.revokeObjectURL(blobUrl), 0)
+}
+
 async function loadLatestMapData() {
+  if (!isLocalEditor) return
   try {
     const response = await fetch('/api/map-data')
     if (!response.ok) return
@@ -388,8 +428,65 @@ async function loadLatestMapData() {
   }
 }
 
-async function persistMapData() {
+function exportLocationChanges(changes) {
+  const payload = {
+    version: 1,
+    type: 'location-changes',
+  }
+  if (changes.categories?.length) payload.categories = changes.categories
+  if (changes.upsertLocations?.length) payload.upsertLocations = changes.upsertLocations
+  if (changes.deletedLocationIds?.length) payload.deletedLocationIds = changes.deletedLocationIds
+  downloadJson(payload, `MaaNTE-location-changes-${new Date().toISOString().slice(0, 10)}.json`)
+  showStatus('点位修改 JSON 已导出')
+}
+
+function queueLocationChanges(changes) {
+  const pending = pendingLocationChanges.value
+  changes.categories?.forEach((category) => {
+    const index = pending.categories.findIndex((item) => item.id === category.id)
+    if (index >= 0) pending.categories.splice(index, 1, clone(category))
+    else pending.categories.push(clone(category))
+  })
+  changes.upsertLocations?.forEach((location) => {
+    const index = pending.upsertLocations.findIndex((item) => item.id === location.id)
+    if (index >= 0) pending.upsertLocations.splice(index, 1, clone(location))
+    else pending.upsertLocations.push(clone(location))
+    pending.deletedLocationIds = pending.deletedLocationIds.filter((id) => id !== location.id)
+  })
+  changes.deletedLocationIds?.forEach((id) => {
+    pending.upsertLocations = pending.upsertLocations.filter((location) => location.id !== id)
+    if (!pending.deletedLocationIds.includes(id)) pending.deletedLocationIds.push(id)
+  })
+}
+
+function discardCreatedLocationChanges(locationId) {
+  const pending = pendingLocationChanges.value
+  pending.upsertLocations = pending.upsertLocations.filter((location) => location.id !== locationId)
+  pending.deletedLocationIds = pending.deletedLocationIds.filter((id) => id !== locationId)
+
+  const usedCategoryIds = new Set(locations.value.flatMap((location) => location.types))
+  const unusedCreatedCategoryIds = new Set(
+    [...sessionCreatedCategoryIds].filter((id) => !usedCategoryIds.has(id)),
+  )
+  if (!unusedCreatedCategoryIds.size) return
+
+  pending.categories = pending.categories.filter((category) => !unusedCreatedCategoryIds.has(category.id))
+  mapData.value.categories = categories.value.filter((category) => !unusedCreatedCategoryIds.has(category.id))
+  unusedCreatedCategoryIds.forEach((id) => sessionCreatedCategoryIds.delete(id))
+}
+
+function exportPendingLocationChanges() {
+  if (!pendingLocationChangeCount.value) return
+  exportLocationChanges(pendingLocationChanges.value)
+}
+
+async function persistMapData({ staticChanges = null } = {}) {
   persistRoutesLocally()
+  if (staticChanges) queueLocationChanges(staticChanges)
+  if (!isLocalEditor) {
+    if (staticChanges) exportLocationChanges(staticChanges)
+    return
+  }
   try {
     const response = await fetch('/api/map-data', {
       method: 'POST',
@@ -399,7 +496,7 @@ async function persistMapData() {
     if (!response.ok) throw new Error('保存失败')
     showStatus('本地数据已保存')
   } catch {
-    // Static deployments keep route edits in localStorage and can export them as JSON.
+    showStatus('本地数据保存失败')
   }
 }
 
@@ -582,12 +679,7 @@ function exportRoutes() {
     version: 1,
     routes: normalizeRoutes(routes.value),
   }
-  const blobUrl = URL.createObjectURL(new Blob([`${JSON.stringify(payload, null, 2)}\n`], { type: 'application/json' }))
-  const link = document.createElement('a')
-  link.href = blobUrl
-  link.download = `MaaNTE-routes-${new Date().toISOString().slice(0, 10)}.json`
-  link.click()
-  URL.revokeObjectURL(blobUrl)
+  downloadJson(payload, `MaaNTE-routes-${new Date().toISOString().slice(0, 10)}.json`)
   showStatus('路线 JSON 已导出')
 }
 
@@ -890,7 +982,110 @@ function toggleCompleted(locationId) {
   const next = new Set(completedIds.value)
   next.has(locationId) ? next.delete(locationId) : next.add(locationId)
   completedIds.value = next
-  localStorage.setItem('nte-completed', JSON.stringify([...next]))
+  localStorage.setItem(COMPLETED_STORAGE_KEY, JSON.stringify([...next]))
+}
+
+function completeDistrictCategory() {
+  if (!bulkIncompleteCount.value) return
+  const newlyCompletedCount = bulkIncompleteCount.value
+  const districtCopy = activeDistricts.value.size === 1
+    ? `“${[...activeDistricts.value][0]}”区域内`
+    : `${activeDistricts.value.size} 个已选区域内`
+  const categoryCopy = bulkCompleteCategoryIds.value.length === 1
+    ? `“${categoryLookup.value[bulkCompleteCategoryIds.value[0]]?.label || bulkCompleteCategoryIds.value[0]}”标签`
+    : `${bulkCompleteCategoryIds.value.length} 个已选标签`
+  if (!window.confirm(`将${districtCopy}命中${categoryCopy}的 ${newlyCompletedCount} 个点位标记为已完成？`)) return
+
+  const next = new Set(completedIds.value)
+  bulkCompleteLocations.value.forEach((location) => next.add(location.id))
+  completedIds.value = next
+  localStorage.setItem(COMPLETED_STORAGE_KEY, JSON.stringify([...next]))
+  showStatus(`已完成 ${newlyCompletedCount} 个点位`)
+}
+
+function removeLocationReferencesFromRoutes(locationIds) {
+  const deletedIds = new Set(locationIds)
+  mapData.value.routes.forEach((route) => {
+    route.segments.forEach((segment) => {
+      segment.points = getSegmentPoints(segment).map((point) => (
+        point.locationId && deletedIds.has(point.locationId)
+          ? { lat: point.lat, lng: point.lng }
+          : point
+      ))
+      delete segment.markerIds
+    })
+  })
+}
+
+function normalizeLocationChanges(payload) {
+  if (!payload || payload.type !== 'location-changes') throw new Error('invalid location changes')
+  const categories = Array.isArray(payload.categories)
+    ? payload.categories.filter((category) => category && typeof category === 'object' && typeof category.id === 'string')
+    : []
+  const upsertLocations = Array.isArray(payload.upsertLocations)
+    ? payload.upsertLocations.filter((location) => location && typeof location === 'object' && typeof location.id === 'string')
+    : []
+  const deletedLocationIds = Array.isArray(payload.deletedLocationIds)
+    ? payload.deletedLocationIds.filter((id) => typeof id === 'string' && id)
+    : []
+  return { categories, upsertLocations, deletedLocationIds }
+}
+
+async function importLocationChanges(event) {
+  const [file] = event.target.files || []
+  event.target.value = ''
+  if (!file) return
+  try {
+    const changes = normalizeLocationChanges(JSON.parse(await file.text()))
+    changes.categories.forEach((category) => {
+      const index = categories.value.findIndex((item) => item.id === category.id)
+      if (index >= 0) mapData.value.categories.splice(index, 1, category)
+      else mapData.value.categories.push(category)
+    })
+    changes.upsertLocations.forEach((location) => {
+      const index = locations.value.findIndex((item) => item.id === location.id)
+      if (index >= 0) mapData.value.locations.splice(index, 1, location)
+      else mapData.value.locations.push(location)
+    })
+    if (changes.deletedLocationIds.length) {
+      const deletedIds = new Set(changes.deletedLocationIds)
+      mapData.value.locations = locations.value.filter((location) => !deletedIds.has(location.id))
+      removeLocationReferencesFromRoutes(deletedIds)
+      if (selectedLocation.value && deletedIds.has(selectedLocation.value.id)) selectedLocation.value = null
+    }
+    await persistMapData()
+    renderMarkers()
+    renderRouteArrows()
+    showStatus(`已导入 ${changes.upsertLocations.length} 条点位修改，删除 ${changes.deletedLocationIds.length} 个点位`)
+  } catch {
+    showStatus('点位修改 JSON 格式无效')
+  }
+}
+
+function exportCompleted() {
+  downloadJson({
+    version: 1,
+    completedIds: [...completedIds.value],
+  }, `MaaNTE-completed-${new Date().toISOString().slice(0, 10)}.json`)
+  showStatus('完成记录 JSON 已导出')
+}
+
+async function importCompleted(event) {
+  const [file] = event.target.files || []
+  event.target.value = ''
+  if (!file) return
+  try {
+    const payload = JSON.parse(await file.text())
+    const importedIds = Array.isArray(payload) ? payload : payload.completedIds
+    if (!Array.isArray(importedIds)) throw new Error('invalid completed ids')
+    const next = new Set(importedIds.filter((id) => typeof id === 'string' && id))
+    completedIds.value = next
+    localStorage.setItem(COMPLETED_STORAGE_KEY, JSON.stringify([...next]))
+    clearCompletedConfirming.value = false
+    showStatus(`已导入 ${next.size} 条完成记录`)
+  } catch {
+    showStatus('完成记录 JSON 格式无效')
+  }
 }
 
 function toggleFavorite(locationId) {
@@ -911,7 +1106,7 @@ function cancelClearCompleted() {
 
 function clearCompleted() {
   completedIds.value = new Set()
-  localStorage.setItem('nte-completed', JSON.stringify([]))
+  localStorage.setItem(COMPLETED_STORAGE_KEY, JSON.stringify([]))
   clearCompletedConfirming.value = false
   showStatus('已清空完成记录')
 }
@@ -990,7 +1185,10 @@ async function saveLocation() {
     showStatus('请填写名称并选择至少一个类型')
     return
   }
-  mapData.value.categories.push(...form.pendingCustomTypes)
+  const addedCategories = clone(form.pendingCustomTypes)
+  mapData.value.categories.push(...addedCategories)
+  addedCategories.forEach((category) => sessionCreatedCategoryIds.add(category.id))
+  const isNewLocation = !editingLocationId.value
   const saved = {
     id: editingLocationId.value || `local-${Date.now()}`,
     name: form.name.trim(),
@@ -1005,29 +1203,34 @@ async function saveLocation() {
   const index = locations.value.findIndex((location) => location.id === saved.id)
   if (index >= 0) mapData.value.locations.splice(index, 1, saved)
   else mapData.value.locations.push(saved)
+  if (isNewLocation) sessionCreatedLocationIds.add(saved.id)
   editorFormOpen.value = false
   selectedLocation.value = saved
-  await persistMapData()
+  await persistMapData({
+    staticChanges: {
+      categories: addedCategories,
+      upsertLocations: [saved],
+    },
+  })
   renderMarkers()
 }
 
 async function deleteLocation(location) {
   if (!window.confirm(`删除“${location.name}”？`)) return
+  const wasCreatedThisSession = sessionCreatedLocationIds.has(location.id)
   mapData.value.locations = locations.value.filter((item) => item.id !== location.id)
-  mapData.value.routes.forEach((route) => {
-    route.segments.forEach((segment) => {
-      segment.points = getSegmentPoints(segment).map((point) => (
-        point.locationId === location.id
-          ? { lat: point.lat, lng: point.lng }
-          : point
-      ))
-      delete segment.markerIds
-    })
-  })
+  removeLocationReferencesFromRoutes([location.id])
+  if (wasCreatedThisSession) {
+    sessionCreatedLocationIds.delete(location.id)
+    discardCreatedLocationChanges(location.id)
+  }
   selectedLocation.value = null
-  await persistMapData()
+  await persistMapData({
+    staticChanges: wasCreatedThisSession ? null : { deletedLocationIds: [location.id] },
+  })
   renderMarkers()
   renderRouteArrows()
+  if (wasCreatedThisSession) showStatus('已删除新建点位，未保留修改记录')
 }
 
 function readFileAsDataUrl(file) {
@@ -1241,6 +1444,11 @@ onUnmounted(() => {
         <button :class="{ 'toolbar-button--active': editorMode }" type="button" @click="editorMode = !editorMode">
           {{ editorMode ? '编辑已开启' : '编辑地图' }}
         </button>
+        <button v-if="editorMode" type="button" @click="locationChangesImportInput?.click()">导入点位修改</button>
+        <button v-if="editorMode" type="button" :disabled="!pendingLocationChangeCount" @click="exportPendingLocationChanges">
+          导出点位修改<span v-if="pendingLocationChangeCount">（{{ pendingLocationChangeCount }}）</span>
+        </button>
+        <input ref="locationChangesImportInput" class="toolbar-file-input" type="file" accept="application/json,.json" @change="importLocationChanges" />
         <button :class="{ 'toolbar-button--active': routePanelOpen }" type="button" @click="routePanelOpen = !routePanelOpen">
           路线
         </button>
@@ -1250,6 +1458,11 @@ onUnmounted(() => {
           <div class="progress-footer">
             <small>{{ completedCount }} / {{ visibleLocationIds.size }} 已完成</small>
             <button v-if="!clearCompletedConfirming" type="button" class="text-button progress-clear-button" :disabled="!completedIds.size" @click="beginClearCompleted">清空</button>
+          </div>
+          <div class="progress-file-actions">
+            <button type="button" @click="completedImportInput?.click()">导入</button>
+            <button type="button" @click="exportCompleted">导出</button>
+            <input ref="completedImportInput" type="file" accept="application/json,.json" @change="importCompleted" />
           </div>
           <div v-if="clearCompletedConfirming" class="progress-confirm-popover glass-panel">
             <span class="progress-confirm-copy">确认清空？</span>
@@ -1341,8 +1554,17 @@ onUnmounted(() => {
                   {{ district }}
                 </button>
               </div>
-              <div v-if="hasActiveDistricts" class="sidebar-expander__actions">
-                <button type="button" class="text-button" @click="clearDistricts">清空区域</button>
+              <div class="sidebar-expander__actions">
+                <button type="button" class="text-button" :disabled="!hasActiveDistricts" @click="clearDistricts">清空区域</button>
+                <button
+                  type="button"
+                  class="text-button"
+                  :disabled="!bulkIncompleteCount"
+                  :title="bulkCompleteCategoryIds.length && hasActiveDistricts ? '' : '请选择至少一个普通标签和一个区域'"
+                  @click="completeDistrictCategory"
+                >
+                  一键完成<span v-if="bulkCompleteCategoryIds.length && hasActiveDistricts">（{{ bulkIncompleteCount }}）</span>
+                </button>
               </div>
             </div>
           </div>
@@ -1488,7 +1710,7 @@ onUnmounted(() => {
         <div v-if="locationForm.images.length" class="form-images">
           <span v-for="(image, index) in locationForm.images" :key="image"><img :src="publicAssetUrl(image)" alt="" /><button type="button" @click="locationForm.images.splice(index, 1)">×</button></span>
         </div>
-        <div class="detail-actions editor-form-actions"><button type="button" @click="editorFormOpen = false">取消</button><button class="primary-action" type="submit">保存</button></div>
+        <div class="detail-actions editor-form-actions"><button type="button" @click="editorFormOpen = false">取消</button><button class="primary-action" type="submit">{{ isLocalEditor ? '保存' : '导出修改 JSON' }}</button></div>
       </form>
     </div>
 

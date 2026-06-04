@@ -257,6 +257,31 @@ kbd {
   margin-top: 8px;
 }
 
+.toolbar button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.toolbar-file-input {
+  display: none;
+}
+
+.progress-file-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 7px;
+}
+
+.toolbar .progress-file-actions button {
+  flex: 1;
+  padding: 3px 6px;
+  font-size: 10px;
+}
+
+.progress-file-actions input {
+  display: none;
+}
+
 .progress-confirm-copy {
   color: #d9ece8;
   font-size: 11px;
@@ -432,7 +457,15 @@ kbd {
 }
 
 .sidebar-expander__actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
   margin-top: 10px;
+}
+
+.sidebar-expander__actions button:disabled {
+  cursor: default;
+  opacity: 0.45;
 }
 
 .search-box,
@@ -1641,15 +1674,17 @@ kbd {
 
 .category-list {
   min-height: 0;
-  max-height: none;
-  flex: 1 1 180px;
+  height: min(360px, 46%);
+  max-height: min(360px, 46%);
+  flex: 0 0 min(360px, 46%);
   margin: 16px 0 12px;
   overflow-y: auto;
 }
 
 .sidebar-footer {
-  flex: 0 1 auto;
-  max-height: min(390px, 46%);
+  min-height: 0;
+  flex: 1 1 auto;
+  max-height: none;
   margin-top: 0;
   overflow-y: auto;
   padding-right: 4px;

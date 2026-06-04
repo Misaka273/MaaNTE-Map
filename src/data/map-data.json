@@ -14520,7 +14520,7 @@
     },
     {
       "id": "tower-004",
-      "name": "维特海默塔 #004",
+      "name": "维特海��塔 #004",
       "types": [
         "tower"
       ],
@@ -17838,6 +17838,32 @@
       "district": "桥间地",
       "lat": -32.28409090909091,
       "lng": -44,
+      "description": "",
+      "tags": [],
+      "images": []
+    },
+    {
+      "id": "local-1780584869722",
+      "name": "1",
+      "types": [
+        "oracle-stone"
+      ],
+      "district": "全地图",
+      "lat": 27.181818181818183,
+      "lng": -59.63636363636363,
+      "description": "1",
+      "tags": [],
+      "images": []
+    },
+    {
+      "id": "local-1780586454506",
+      "name": "2",
+      "types": [
+        "oracle-stone"
+      ],
+      "district": "全地图",
+      "lat": 64,
+      "lng": -14.818181818181818,
       "description": "",
       "tags": [],
       "images": []
