@@ -147,6 +147,7 @@ const mergeAdjacentLocationsEnabled = ref(initialMergeAdjacentLocationsEnabled)
 const selectedLocation = ref(null)
 const completedIds = ref(readStoredIds(COMPLETED_STORAGE_KEY))
 const favoriteIds = ref(readStoredIds('nte-favorites'))
+const showFavoritesOnly = ref(storedMarkerFilters?.showFavoritesOnly === true)
 const pendingLocationChanges = ref({
   categories: [],
   upsertLocations: [],
@@ -236,6 +237,7 @@ const visibleLocationIds = computed(() => new Set(
     .map((location) => location.id),
 ))
 const completedCount = computed(() => [...completedIds.value].filter((id) => visibleLocationIds.value.has(id)).length)
+const favoriteCount = computed(() => [...favoriteIds.value].filter((id) => visibleLocationIds.value.has(id)).length)
 const progress = computed(() => Math.round((completedCount.value / Math.max(visibleLocationIds.value.size, 1)) * 100))
 const pendingLocationChangeCount = computed(() => (
   pendingLocationChanges.value.upsertLocations.length + pendingLocationChanges.value.deletedLocationIds.length
@@ -273,9 +275,10 @@ const filteredLocations = computed(() => {
       || activeDistricts.value.has(districtLabel)
       || (districtLabel === '全地图' && isTeleportLocation(location))
     const incompleteVisible = !showIncompleteOnly.value || !completedIds.value.has(location.id)
+    const favoriteVisible = !showFavoritesOnly.value || favoriteIds.value.has(location.id)
     const typeLabels = location.types.map((type) => categoryLookup.value[type]?.label || type)
     const text = `${location.name} ${districtLabel} ${location.tags.join(' ')} ${typeLabels.join(' ')}`.toLowerCase()
-    return categoryVisible && districtVisible && incompleteVisible && (!keyword || text.includes(keyword))
+    return categoryVisible && districtVisible && incompleteVisible && favoriteVisible && (!keyword || text.includes(keyword))
   })
 })
 
@@ -314,6 +317,7 @@ function restoreMarkerFilters() {
     ? storedFilters.mergeAdjacentLocationsEnabled
     : true
   showIncompleteOnly.value = storedFilters?.showIncompleteOnly === true
+  showFavoritesOnly.value = storedFilters?.showFavoritesOnly === true
   realtimeNavigationEnabled.value = storedFilters?.realtimeNavigationEnabled === true
   centerNavigationEnabled.value = storedFilters?.centerNavigationEnabled === true
   navigationHost.value = normalizeNavigationHost(storedFilters?.navigationHost || defaultNavigationEndpoint.host)
@@ -358,6 +362,7 @@ function persistMarkerFilters() {
     keepTeleportEnabled: keepTeleportEnabled.value,
     mergeAdjacentLocationsEnabled: mergeAdjacentLocationsEnabled.value,
     showIncompleteOnly: showIncompleteOnly.value,
+    showFavoritesOnly: showFavoritesOnly.value,
     realtimeNavigationEnabled: realtimeNavigationEnabled.value,
     centerNavigationEnabled: centerNavigationEnabled.value,
     navigationHost: normalizeNavigationHost(navigationHost.value),
@@ -1345,7 +1350,7 @@ watch(activeDistricts, async () => {
 }, { deep: true })
 watch(activeDistricts, persistMarkerFilters, { deep: true })
 watch(activeRouteId, () => nextTick(renderRouteArrows))
-watch([() => [...activeCategories.value], keepTeleportEnabled, showIncompleteOnly], persistMarkerFilters)
+watch([() => [...activeCategories.value], keepTeleportEnabled, showIncompleteOnly, showFavoritesOnly], persistMarkerFilters)
 watch(mergeAdjacentLocationsEnabled, () => {
   persistMarkerFilters()
   rebuildMarkerLayer()
@@ -1489,6 +1494,20 @@ onUnmounted(() => {
             </div>
           </div>
           <div class="category-list">
+            <div class="category-group-block">
+              <p class="category-group">收藏</p>
+              <div class="category-group-items">
+                <button
+                  class="category-button"
+                  :class="{ 'category-button--muted': !showFavoritesOnly }"
+                  type="button"
+                  @click="showFavoritesOnly = !showFavoritesOnly"
+                >
+                  <span class="category-icon" :style="{ '--category-color': '#f1c75b' }">★</span>
+                  <span>已收藏</span><small>{{ favoriteCount }}</small>
+                </button>
+              </div>
+            </div>
             <template v-for="group in groupedCategories" :key="group.label">
               <div class="category-group-block" :class="{ 'category-group-block--collapsed': isCategoryGroupCollapsed(group.label) }">
                 <button
