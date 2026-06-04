@@ -630,14 +630,10 @@ kbd {
 }
 
 .category-list {
-  display: grid;
-  grid-template-columns: 1fr;
-  grid-auto-rows: max-content;
-  align-content: start;
-  align-items: start;
+  display: flex;
+  flex-direction: column;
   gap: 0;
   margin: 16px 0;
-  max-height: 268px;
   overflow-y: auto;
   padding-right: 4px;
 }
@@ -665,7 +661,7 @@ kbd {
   display: grid;
   gap: 8px;
   margin-top: 7px;
-  align-self: start;
+  flex: 0 0 auto;
 }
 
 .category-group-block--collapsed {
@@ -1668,23 +1664,28 @@ kbd {
 
 /* Keep interface chrome monochrome; marker accents remain category-specific. */
 .sidebar-content {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
   min-height: 0;
+  overflow: hidden;
+}
+
+.sidebar-categories {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
   overflow: hidden;
 }
 
 .category-list {
   min-height: 0;
-  height: min(360px, 46%);
-  max-height: min(360px, 46%);
-  flex: 0 0 min(360px, 46%);
-  margin: 16px 0 12px;
+  flex: 1 1 auto;
+  margin: 16px 0 6px;
   overflow-y: auto;
 }
 
 .sidebar-footer {
   min-height: 0;
-  flex: 1 1 auto;
-  max-height: none;
   margin-top: 0;
   overflow-y: auto;
   padding-right: 4px;
@@ -1748,14 +1749,6 @@ kbd {
 }
 
 @media (max-height: 760px) {
-  .category-list {
-    flex-basis: 220px;
-  }
-
-  .sidebar-footer {
-    max-height: 30%;
-  }
-
   .switch-row,
   .sidebar-expander__toggle,
   .navigation-endpoint-row {

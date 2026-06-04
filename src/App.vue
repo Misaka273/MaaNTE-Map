@@ -1480,60 +1480,62 @@ onUnmounted(() => {
         {{ sidebarCollapsed ? '›' : '‹' }}
       </button>
       <div class="sidebar-content">
-        <div class="sidebar-heading">
-          <div><p class="eyebrow">MARKER CATEGORIES</p><h2>标记分类</h2></div>
-          <div class="filter-actions">
-            <button type="button" class="text-button" @click="selectAllCategories">全选</button>
-            <button type="button" class="text-button" @click="clearCategories">清空</button>
-          </div>
-        </div>
-        <div class="category-list">
-          <template v-for="group in groupedCategories" :key="group.label">
-            <div class="category-group-block" :class="{ 'category-group-block--collapsed': isCategoryGroupCollapsed(group.label) }">
-              <button
-                v-if="collapsibleGroupLabels.has(group.label)"
-                class="category-group-toggle"
-                type="button"
-                @click="toggleCategoryGroup(group.label)"
-              >
-                <span class="category-group-heading">
-                  <span class="category-group-title">{{ group.label }}</span>
-                </span>
-                <span class="category-group-meta">
-                  <button
-                    class="category-select-all category-select-all--inline"
-                    :class="{
-                      'category-select-all--active': isGroupFullySelected(group),
-                      'category-select-all--partial': isGroupPartiallySelected(group),
-                    }"
-                    type="button"
-                    :aria-checked="isGroupFullySelected(group) ? 'true' : isGroupPartiallySelected(group) ? 'mixed' : 'false'"
-                    role="checkbox"
-                    @click.stop="toggleCategoryGroupSelection(group)"
-                  >
-                    <span>全选</span>
-                    <span class="category-select-all__box" aria-hidden="true">
-                      <i v-if="isGroupFullySelected(group)" class="category-select-all__check" />
-                      <i v-else-if="isGroupPartiallySelected(group)" class="category-select-all__dash" />
-                    </span>
-                  </button>
-                  <small>{{ group.categories.length }}</small>
-                  <i>{{ isCategoryGroupCollapsed(group.label) ? '▸' : '▾' }}</i>
-                </span>
-              </button>
-              <p v-else class="category-group">{{ group.label }}</p>
-              <div v-show="!isCategoryGroupCollapsed(group.label)" class="category-group-items">
-                <button v-for="category in group.categories" :key="category.id" class="category-button"
-                  :class="{ 'category-button--muted': !activeCategories.has(category.id) }" type="button" @click="toggleCategory(category.id)">
-                  <span class="category-icon" :style="{ '--category-color': category.color }">
-                    <img v-if="category.iconUrl" :src="publicAssetUrl(category.iconUrl)" alt="" />
-                    <template v-else>{{ category.icon }}</template>
-                  </span>
-                  <span>{{ category.label }}</span><small>{{ visibleCounts[category.id] }}</small>
-                </button>
-              </div>
+        <div class="sidebar-categories">
+          <div class="sidebar-heading">
+            <div><p class="eyebrow">MARKER CATEGORIES</p><h2>标记分类</h2></div>
+            <div class="filter-actions">
+              <button type="button" class="text-button" @click="selectAllCategories">全选</button>
+              <button type="button" class="text-button" @click="clearCategories">清空</button>
             </div>
-          </template>
+          </div>
+          <div class="category-list">
+            <template v-for="group in groupedCategories" :key="group.label">
+              <div class="category-group-block" :class="{ 'category-group-block--collapsed': isCategoryGroupCollapsed(group.label) }">
+                <button
+                  v-if="collapsibleGroupLabels.has(group.label)"
+                  class="category-group-toggle"
+                  type="button"
+                  @click="toggleCategoryGroup(group.label)"
+                >
+                  <span class="category-group-heading">
+                    <span class="category-group-title">{{ group.label }}</span>
+                  </span>
+                  <span class="category-group-meta">
+                    <button
+                      class="category-select-all category-select-all--inline"
+                      :class="{
+                        'category-select-all--active': isGroupFullySelected(group),
+                        'category-select-all--partial': isGroupPartiallySelected(group),
+                      }"
+                      type="button"
+                      :aria-checked="isGroupFullySelected(group) ? 'true' : isGroupPartiallySelected(group) ? 'mixed' : 'false'"
+                      role="checkbox"
+                      @click.stop="toggleCategoryGroupSelection(group)"
+                    >
+                      <span>全选</span>
+                      <span class="category-select-all__box" aria-hidden="true">
+                        <i v-if="isGroupFullySelected(group)" class="category-select-all__check" />
+                        <i v-else-if="isGroupPartiallySelected(group)" class="category-select-all__dash" />
+                      </span>
+                    </button>
+                    <small>{{ group.categories.length }}</small>
+                    <i>{{ isCategoryGroupCollapsed(group.label) ? '▸' : '▾' }}</i>
+                  </span>
+                </button>
+                <p v-else class="category-group">{{ group.label }}</p>
+                <div v-show="!isCategoryGroupCollapsed(group.label)" class="category-group-items">
+                  <button v-for="category in group.categories" :key="category.id" class="category-button"
+                    :class="{ 'category-button--muted': !activeCategories.has(category.id) }" type="button" @click="toggleCategory(category.id)">
+                    <span class="category-icon" :style="{ '--category-color': category.color }">
+                      <img v-if="category.iconUrl" :src="publicAssetUrl(category.iconUrl)" alt="" />
+                      <template v-else>{{ category.icon }}</template>
+                    </span>
+                    <span>{{ category.label }}</span><small>{{ visibleCounts[category.id] }}</small>
+                  </button>
+                </div>
+              </div>
+            </template>
+          </div>
         </div>
         <div class="sidebar-footer">
           <div class="sidebar-expander">
