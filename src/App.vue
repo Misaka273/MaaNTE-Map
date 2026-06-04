@@ -157,7 +157,9 @@ const sessionCreatedLocationIds = new Set()
 const sessionCreatedCategoryIds = new Set()
 const showIncompleteOnly = ref(storedMarkerFilters?.showIncompleteOnly === true)
 const realtimeNavigationEnabled = ref(storedMarkerFilters?.realtimeNavigationEnabled === true)
-const centerNavigationEnabled = ref(storedMarkerFilters?.centerNavigationEnabled === true)
+const centerNavigationEnabled = ref(typeof storedMarkerFilters?.centerNavigationEnabled === 'boolean'
+  ? storedMarkerFilters.centerNavigationEnabled
+  : true)
 const defaultNavigationEndpoint = parseNavigationWebSocketUrl(DEFAULT_NAVIGATION_WEBSOCKET_URL)
 const navigationHost = ref(normalizeNavigationHost(storedMarkerFilters?.navigationHost || defaultNavigationEndpoint.host))
 const navigationPort = ref(normalizeNavigationPort(storedMarkerFilters?.navigationPort || defaultNavigationEndpoint.port))
@@ -319,7 +321,9 @@ function restoreMarkerFilters() {
   showIncompleteOnly.value = storedFilters?.showIncompleteOnly === true
   showFavoritesOnly.value = storedFilters?.showFavoritesOnly === true
   realtimeNavigationEnabled.value = storedFilters?.realtimeNavigationEnabled === true
-  centerNavigationEnabled.value = storedFilters?.centerNavigationEnabled === true
+  centerNavigationEnabled.value = typeof storedFilters?.centerNavigationEnabled === 'boolean'
+    ? storedFilters.centerNavigationEnabled
+    : true
   navigationHost.value = normalizeNavigationHost(storedFilters?.navigationHost || defaultNavigationEndpoint.host)
   navigationPort.value = normalizeNavigationPort(storedFilters?.navigationPort || defaultNavigationEndpoint.port)
 
@@ -1359,7 +1363,6 @@ watch(realtimeNavigationEnabled, () => {
   persistMarkerFilters()
   if (realtimeNavigationEnabled.value) connectNavigationSocket()
   else {
-    centerNavigationEnabled.value = false
     disconnectNavigationSocket()
   }
 })
