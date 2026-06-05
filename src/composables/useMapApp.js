@@ -132,6 +132,7 @@ export function useMapApp() {
   const routePanelOpen = ref(false)
   const activeRouteId = ref(null)
   const isAddingSegment = ref(false)
+  const editingSegmentId = ref(null)
   const segmentPoints = ref([])
   const routeImportInput = ref(null)
   const completedImportInput = ref(null)
@@ -192,6 +193,7 @@ export function useMapApp() {
 
   // 统计和筛选派生数据：模板只消费这些计算结果。
   const activeRoute = computed(() => routes.value.find((route) => route.id === activeRouteId.value) || null)
+  const editingSegment = computed(() => activeRoute.value?.segments.find((segment) => segment.id === editingSegmentId.value) || null)
   const getVisibleTypes = (location) => location.types.filter((type) => !categoryLookup.value[type]?.isHidden)
   const visibleLocationIds = computed(() => new Set(
     locations.value
@@ -659,17 +661,93 @@ export function useMapApp() {
     return Array.isArray(points) ? points.map(normalizeRoutePoint).filter(Boolean) : []
   }
 
+  function getRoutePointLabel(point, index) {
+    const normalized = normalizeRoutePoint(point)
+    if (!normalized) return `#${index + 1}`
+    const location = normalized.locationId ? locationLookup.value[normalized.locationId] : null
+    if (location) return `${index + 1}. ${location.name}`
+    return `${index + 1}. ${normalized.lat.toFixed(2)}, ${normalized.lng.toFixed(2)}`
+  }
+
+  function updateSegmentPoint(index, latlng) {
+    const point = mapLatLngToWorld(latlng)
+    segmentPoints.value = segmentPoints.value.map((item, pointIndex) => (
+      pointIndex === index
+        ? { lat: Number(point.lat.toFixed(6)), lng: Number(point.lng.toFixed(6)) }
+        : item
+    ))
+  }
+
+  function createRoutePointPopup(index) {
+    const container = document.createElement('div')
+    container.className = 'route-point-popup'
+    const title = document.createElement('b')
+    title.textContent = getRoutePointLabel(segmentPoints.value[index], index)
+    container.appendChild(title)
+
+    const actions = document.createElement('div')
+    const actionItems = [
+      ['up', '上移', index === 0],
+      ['down', '下移', index === segmentPoints.value.length - 1],
+      ['delete', '删除', false],
+    ]
+    actionItems.forEach(([action, label, disabled]) => {
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.textContent = label
+      button.disabled = disabled
+      button.addEventListener('click', (event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        if (action === 'up') moveSegmentPoint(index, -1)
+        if (action === 'down') moveSegmentPoint(index, 1)
+        if (action === 'delete') removeSegmentPoint(index)
+      })
+      actions.appendChild(button)
+    })
+    container.appendChild(actions)
+    return container
+  }
+
+  function drawEditableRoutePoint(point, index, color) {
+    const marker = L.marker(worldToMapLatLng(point), {
+      draggable: true,
+      title: getRoutePointLabel(point, index),
+      icon: L.divIcon({
+        className: 'route-point-handle',
+        html: `<i style="border-color:${color};background:${color}">${index + 1}</i>`,
+        iconSize: [22, 22],
+        iconAnchor: [11, 11],
+      }),
+    }).addTo(arrowLayer)
+
+    marker.bindPopup(createRoutePointPopup(index), {
+      className: 'route-point-popup-shell',
+      closeButton: false,
+      offset: [0, -10],
+    })
+    marker.on('dragstart', () => marker.closePopup())
+    marker.on('dragend', (event) => {
+      updateSegmentPoint(index, event.target.getLatLng())
+      renderRouteArrows()
+    })
+  }
+
   function drawRoutePath(points, color, temporary = false) {
     points.forEach((point, index) => {
-      L.circleMarker(worldToMapLatLng(point), {
-        className: 'route-point',
-        color,
-        fillColor: color,
-        fillOpacity: temporary ? 0.72 : 0.9,
-        opacity: 1,
-        radius: point.locationId ? 4 : 5,
-        weight: 2,
-      }).addTo(arrowLayer)
+      if (temporary) {
+        drawEditableRoutePoint(point, index, color)
+      } else {
+        L.circleMarker(worldToMapLatLng(point), {
+          className: 'route-point',
+          color,
+          fillColor: color,
+          fillOpacity: 0.9,
+          opacity: 1,
+          radius: point.locationId ? 4 : 5,
+          weight: 2,
+        }).addTo(arrowLayer)
+      }
       if (index > 0) drawArrow(points[index - 1], point, color, temporary)
     })
   }
@@ -678,9 +756,11 @@ export function useMapApp() {
     return importedRoutes.filter((route) => route && typeof route === 'object').map((route, routeIndex) => ({
       id: String(route.id || `route-${Date.now()}-${routeIndex}`),
       name: String(route.name || `路线 ${routeIndex + 1}`),
+      isHidden: route.isHidden === true,
       segments: Array.isArray(route.segments) ? route.segments.filter((segment) => segment && typeof segment === 'object').map((segment, segmentIndex) => ({
         id: String(segment.id || `segment-${Date.now()}-${routeIndex}-${segmentIndex}`),
         name: String(segment.name || `路段 ${segmentIndex + 1}`),
+        isHidden: segment.isHidden === true,
         points: getSegmentPoints(segment),
       })) : [],
     }))
@@ -722,7 +802,15 @@ export function useMapApp() {
       return
     }
     const colors = ['#ffd27d', '#8adfd6', '#e8a6ff', '#ff8a70', '#87a9ff']
-    activeRoute.value?.segments.forEach((segment, index) => drawRoutePath(getSegmentPoints(segment), colors[index % colors.length]))
+    routes.value
+      .filter((route) => !route.isHidden)
+      .forEach((route, routeIndex) => {
+        route.segments
+          .filter((segment) => !segment.isHidden)
+          .forEach((segment, segmentIndex) => {
+            drawRoutePath(getSegmentPoints(segment), colors[(routeIndex + segmentIndex) % colors.length])
+          })
+      })
   }
 
   // 实时导航：维护 WebSocket 连接、箭头角度和地图跟随。
@@ -1336,18 +1424,52 @@ export function useMapApp() {
   function startSegment() {
     if (!activeRoute.value) return
     isAddingSegment.value = true
+    editingSegmentId.value = null
     segmentPoints.value = []
     selectedLocation.value = null
   }
 
+  function editSegment(segment) {
+    if (!activeRoute.value || !segment) return
+    isAddingSegment.value = true
+    editingSegmentId.value = segment.id
+    segmentPoints.value = getSegmentPoints(segment)
+    selectedLocation.value = null
+    renderRouteArrows()
+  }
+
   function cancelSegment() {
     isAddingSegment.value = false
+    editingSegmentId.value = null
     segmentPoints.value = []
+    renderRouteArrows()
+  }
+
+  function removeSegmentPoint(index) {
+    segmentPoints.value = segmentPoints.value.filter((_, pointIndex) => pointIndex !== index)
+    renderRouteArrows()
+  }
+
+  function moveSegmentPoint(index, offset) {
+    const targetIndex = index + offset
+    if (targetIndex < 0 || targetIndex >= segmentPoints.value.length) return
+    const nextPoints = [...segmentPoints.value]
+    ;[nextPoints[index], nextPoints[targetIndex]] = [nextPoints[targetIndex], nextPoints[index]]
+    segmentPoints.value = nextPoints
     renderRouteArrows()
   }
 
   async function finishSegment() {
     if (!activeRoute.value || segmentPoints.value.length < 2) return
+    if (editingSegment.value) {
+      editingSegment.value.points = [...segmentPoints.value]
+      isAddingSegment.value = false
+      editingSegmentId.value = null
+      segmentPoints.value = []
+      await persistMapData()
+      renderRouteArrows()
+      return
+    }
     const name = window.prompt('路段名称')
     if (!name?.trim()) return
     activeRoute.value.segments.push({
@@ -1356,6 +1478,7 @@ export function useMapApp() {
       points: [...segmentPoints.value],
     })
     isAddingSegment.value = false
+    editingSegmentId.value = null
     segmentPoints.value = []
     await persistMapData()
     renderRouteArrows()
@@ -1364,6 +1487,28 @@ export function useMapApp() {
   async function deleteSegment(segment) {
     if (!activeRoute.value || !window.confirm(`删除路段“${segment.name}”？`)) return
     activeRoute.value.segments = activeRoute.value.segments.filter((item) => item.id !== segment.id)
+    if (editingSegmentId.value === segment.id) cancelSegment()
+    await persistMapData()
+    renderRouteArrows()
+  }
+
+  async function toggleRouteVisibility(route) {
+    if (activeRouteId.value !== route.id) {
+      activeRouteId.value = route.id
+      if (route.isHidden) {
+        route.isHidden = false
+        await persistMapData()
+        renderRouteArrows()
+      }
+      return
+    }
+    route.isHidden = !route.isHidden
+    await persistMapData()
+    renderRouteArrows()
+  }
+
+  async function toggleSegmentVisibility(segment) {
+    segment.isHidden = !segment.isHidden
     await persistMapData()
     renderRouteArrows()
   }
@@ -1400,7 +1545,14 @@ export function useMapApp() {
     fitLocationsBounds(focusLocations.length ? focusLocations : filteredLocations.value)
   }, { deep: true })
   watch(activeDistricts, persistMarkerFilters, { deep: true })
-  watch(activeRouteId, () => nextTick(renderRouteArrows))
+  watch(activeRouteId, () => {
+    if (isAddingSegment.value) {
+      isAddingSegment.value = false
+      editingSegmentId.value = null
+      segmentPoints.value = []
+    }
+    nextTick(renderRouteArrows)
+  })
   watch([() => [...activeCategories.value], keepTeleportEnabled, showIncompleteOnly, showFavoritesOnly], persistMarkerFilters)
   watch(editorMode, () => {
     if (!editorMode.value) showPendingLocationChangesOnly.value = false
@@ -1518,6 +1670,8 @@ export function useMapApp() {
     editorFormOpen,
     editorMode,
     editingLocationId,
+    editingSegment,
+    editSegment,
     exportCompleted,
     exportPendingLocationChanges,
     exportRoutes,
@@ -1525,6 +1679,8 @@ export function useMapApp() {
     favoriteIds,
     filteredLocations,
     finishSegment,
+    focusSegment,
+    getRoutePointLabel,
     getSegmentPoints,
     getVisibleTypes,
     groupedCategories,
@@ -1542,6 +1698,7 @@ export function useMapApp() {
     locationForm,
     mapElement,
     mergeAdjacentLocationsEnabled,
+    moveSegmentPoint,
     navigationConnectionLabel,
     navigationConnectionStatus,
     navigationHost,
@@ -1557,6 +1714,7 @@ export function useMapApp() {
     query,
     realtimeNavigationEnabled,
     renderRouteArrows,
+    removeSegmentPoint,
     resetView,
     routeImportInput,
     routePanelOpen,
@@ -1578,6 +1736,8 @@ export function useMapApp() {
     toggleCompleted,
     toggleDistrict,
     toggleFavorite,
+    toggleRouteVisibility,
+    toggleSegmentVisibility,
     toggleTeleportProtection,
     uploadImages,
     visibleCounts,

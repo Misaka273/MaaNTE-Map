@@ -39,6 +39,8 @@ const {
   editorFormOpen,
   editorMode,
   editingLocationId,
+  editingSegment,
+  editSegment,
   exportCompleted,
   exportPendingLocationChanges,
   exportRoutes,
@@ -99,6 +101,8 @@ const {
   toggleCompleted,
   toggleDistrict,
   toggleFavorite,
+  toggleRouteVisibility,
+  toggleSegmentVisibility,
   toggleTeleportProtection,
   uploadImages,
   visibleCounts,
@@ -327,8 +331,8 @@ const {
         <input ref="routeImportInput" type="file" accept="application/json,.json" @change="importRoutes" />
       </div>
       <div class="route-list">
-        <button v-for="route in routes" :key="route.id" type="button" :class="{ active: activeRouteId === route.id }" @click="activeRouteId = route.id">
-          <span>{{ route.name }}</span><small>{{ route.segments.length }} 个路段</small>
+        <button v-for="route in routes" :key="route.id" type="button" :class="{ active: activeRouteId === route.id, hidden: route.isHidden }" @click="toggleRouteVisibility(route)">
+          <span>{{ route.name }}</span><small>{{ route.isHidden ? '已隐藏' : `${route.segments.length} 个路段` }}</small>
         </button>
       </div>
       <template v-if="activeRoute">
@@ -337,15 +341,16 @@ const {
           <button v-if="editorMode" type="button" @click="deleteRoute(activeRoute)">删除路线</button>
         </div>
         <div v-if="isAddingSegment" class="segment-editor">
-          <span>依次点击已有标点或地图空白处：{{ segmentPoints.length }} 个</span>
+          <span>{{ editingSegment ? `正在编辑：${editingSegment.name}` : '新路段' }}：{{ segmentPoints.length }} 个点</span>
           <button type="button" @click="segmentPoints = segmentPoints.slice(0, -1); renderRouteArrows()">撤销</button>
           <button type="button" @click="cancelSegment">取消</button>
-          <button type="button" :disabled="segmentPoints.length < 2" @click="finishSegment">完成</button>
+          <button type="button" :disabled="segmentPoints.length < 2" @click="finishSegment">{{ editingSegment ? '保存' : '完成' }}</button>
         </div>
         <button v-else-if="editorMode" class="add-segment-button" type="button" @click="startSegment">+ 添加路段</button>
         <div class="segment-list">
-          <button v-for="segment in activeRoute.segments" :key="segment.id" type="button" @click="focusSegment(segment)">
-            <span>{{ segment.name }}</span><small>{{ getSegmentPoints(segment).length }} 个点</small>
+          <button v-for="segment in activeRoute.segments" :key="segment.id" type="button" :class="{ hidden: segment.isHidden }" @click="toggleSegmentVisibility(segment)">
+            <span>{{ segment.name }}</span><small>{{ segment.isHidden ? '已隐藏' : `${getSegmentPoints(segment).length} 个点` }}</small>
+            <i v-if="editorMode" @click.stop="editSegment(segment)">编辑</i>
             <i v-if="editorMode" @click.stop="deleteSegment(segment)">×</i>
           </button>
         </div>

@@ -1360,6 +1360,11 @@ kbd {
   text-align: left;
 }
 
+.route-list button.hidden,
+.segment-list button.hidden {
+  opacity: 0.55;
+}
+
 .route-list button.active,
 .route-list button:hover,
 .segment-list button:hover {
@@ -1385,6 +1390,10 @@ kbd {
   font-style: normal;
 }
 
+.segment-list i:first-of-type {
+  color: #8adfd6;
+}
+
 .add-segment-button {
   width: 100%;
   margin-top: 12px;
@@ -1400,7 +1409,7 @@ kbd {
   font-size: 11px;
 }
 
-.segment-editor span {
+.segment-editor > span {
   width: 100%;
 }
 
@@ -1421,6 +1430,74 @@ kbd {
 
 .route-point {
   filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.6));
+}
+
+.route-point-handle {
+  background: transparent;
+}
+
+.route-point-handle i {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  color: #1c1810;
+  border: 2px solid;
+  border-radius: 50%;
+  box-shadow: 0 2px 7px rgba(0, 0, 0, 0.7);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 800;
+  line-height: 1;
+  cursor: grab;
+}
+
+.leaflet-drag-target .route-point-handle i {
+  cursor: grabbing;
+}
+
+.route-point-popup-shell .leaflet-popup-content-wrapper,
+.route-point-popup-shell .leaflet-popup-tip {
+  color: #d9fff8;
+  background: rgba(6, 20, 22, 0.95);
+  border: 1px solid rgba(123, 235, 220, 0.28);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.42);
+}
+
+.route-point-popup-shell .leaflet-popup-content {
+  margin: 8px;
+}
+
+.route-point-popup {
+  display: grid;
+  min-width: 128px;
+  gap: 7px;
+}
+
+.route-point-popup b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.route-point-popup div {
+  display: flex;
+  gap: 5px;
+}
+
+.route-point-popup button {
+  padding: 4px 6px;
+  color: #c7e4e1;
+  border: 1px solid rgba(143, 208, 201, 0.22);
+  border-radius: 4px;
+  background: rgba(52, 108, 104, 0.28);
+  font-size: 11px;
+}
+
+.route-point-popup button:disabled {
+  cursor: default;
+  opacity: 0.45;
 }
 
 .route-arrow i {
