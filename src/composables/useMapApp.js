@@ -26,7 +26,12 @@ import {
   ROUTES_STORAGE_KEY,
 } from '../constants/mapApp'
 import { clone, publicAssetUrl } from '../utils/assets'
-import { normalizeNavigationHost, normalizeNavigationPort, parseNavigationWebSocketUrl } from '../utils/navigationEndpoint'
+import {
+  normalizeNavigationHost,
+  normalizeNavigationPort,
+  normalizeNavigationProtocol,
+  parseNavigationWebSocketUrl,
+} from '../utils/navigationEndpoint'
 import { readStoredIds, readStoredMapView, readStoredMarkerFilters } from '../utils/storage'
 
 // 地图应用的主组合函数。App.vue 只关心模板，具体行为在这里按功能区维护。
@@ -40,12 +45,6 @@ export function useMapApp() {
   const locationLookup = computed(() => Object.fromEntries(locations.value.map((location) => [location.id, location])))
   const bounds = L.latLngBounds([-MAP_HEIGHT, 0], [0, MAP_WIDTH])
   const isLocalEditor = import.meta.env.DEV
-
-
-
-
-
-
 
   function getInitialCategories() {
     return new Set(visibleCategories.value.map((category) => category.id))
@@ -86,6 +85,7 @@ export function useMapApp() {
     }
     return nextCategories
   })()
+  const initialCategoryGroupLabels = new Set(categories.value.map((category) => category.group).filter(Boolean))
   const initialActiveDistricts = new Set(
     Array.isArray(storedMarkerFilters?.activeDistricts)
       ? storedMarkerFilters.activeDistricts.map((district) => normalizeDistrictLabel(district)).filter(Boolean)
@@ -116,6 +116,7 @@ export function useMapApp() {
     ? storedMarkerFilters.centerNavigationEnabled
     : true)
   const defaultNavigationEndpoint = parseNavigationWebSocketUrl(DEFAULT_NAVIGATION_WEBSOCKET_URL)
+  const navigationProtocol = ref(normalizeNavigationProtocol(storedMarkerFilters?.navigationProtocol || defaultNavigationEndpoint.protocol))
   const navigationHost = ref(normalizeNavigationHost(storedMarkerFilters?.navigationHost || defaultNavigationEndpoint.host))
   const navigationPort = ref(normalizeNavigationPort(storedMarkerFilters?.navigationPort || defaultNavigationEndpoint.port))
   const coordinates = ref({ lat: 0, lng: 0 })
@@ -125,6 +126,7 @@ export function useMapApp() {
   const editorMode = ref(false)
   const editorFormOpen = ref(false)
   const editingLocationId = ref(null)
+  const showPendingLocationChangesOnly = ref(false)
   const previewImage = ref('')
   const statusMessage = ref('')
   const routePanelOpen = ref(false)
@@ -150,12 +152,13 @@ export function useMapApp() {
     connecting: 'CONNECTING',
     disconnected: 'OFFLINE',
   })[navigationConnectionStatus.value])
-  const navigationWebSocketUrl = computed(() => `ws://${normalizeNavigationHost(navigationHost.value)}:${normalizeNavigationPort(navigationPort.value)}`)
+  const navigationWebSocketUrl = computed(() => `${normalizeNavigationProtocol(navigationProtocol.value)}://${normalizeNavigationHost(navigationHost.value)}:${normalizeNavigationPort(navigationPort.value)}`)
 
   const emptyLocationForm = () => ({
+    locationId: '',
     name: '',
     types: [],
-    district: '',
+    district: '全地图',
     lat: 0,
     lng: 0,
     description: '',
@@ -199,8 +202,14 @@ export function useMapApp() {
   const favoriteCount = computed(() => [...favoriteIds.value].filter((id) => visibleLocationIds.value.has(id)).length)
   const progress = computed(() => Math.round((completedCount.value / Math.max(visibleLocationIds.value.size, 1)) * 100))
   const pendingLocationChangeCount = computed(() => (
-    pendingLocationChanges.value.upsertLocations.length + pendingLocationChanges.value.deletedLocationIds.length
+    pendingLocationChanges.value.categories.length
+    + pendingLocationChanges.value.upsertLocations.length
+    + pendingLocationChanges.value.deletedLocationIds.length
   ))
+  const pendingLocationChangeIds = computed(() => new Set(
+    pendingLocationChanges.value.upsertLocations.map((location) => location.id),
+  ))
+  const pendingLocationFilterCount = computed(() => pendingLocationChangeIds.value.size)
   const districtOptions = computed(() => {
     const districts = [...new Set(locations.value.map((location) => normalizeDistrictLabel(location.district)).filter(Boolean))]
     return districts.sort((left, right) => {
@@ -235,9 +244,10 @@ export function useMapApp() {
         || (districtLabel === '全地图' && isTeleportLocation(location))
       const incompleteVisible = !showIncompleteOnly.value || !completedIds.value.has(location.id)
       const favoriteVisible = !showFavoritesOnly.value || favoriteIds.value.has(location.id)
+      const pendingVisible = !showPendingLocationChangesOnly.value || pendingLocationChangeIds.value.has(location.id)
       const typeLabels = location.types.map((type) => categoryLookup.value[type]?.label || type)
       const text = `${location.name} ${districtLabel} ${location.tags.join(' ')} ${typeLabels.join(' ')}`.toLowerCase()
-      return categoryVisible && districtVisible && incompleteVisible && favoriteVisible && (!keyword || text.includes(keyword))
+      return categoryVisible && districtVisible && incompleteVisible && favoriteVisible && pendingVisible && (!keyword || text.includes(keyword))
     })
   })
 
@@ -327,6 +337,7 @@ export function useMapApp() {
       showFavoritesOnly: showFavoritesOnly.value,
       realtimeNavigationEnabled: realtimeNavigationEnabled.value,
       centerNavigationEnabled: centerNavigationEnabled.value,
+      navigationProtocol: normalizeNavigationProtocol(navigationProtocol.value),
       navigationHost: normalizeNavigationHost(navigationHost.value),
       navigationPort: normalizeNavigationPort(navigationPort.value),
       districtFilterOpen: districtFilterOpen.value,
@@ -395,14 +406,46 @@ export function useMapApp() {
     }
   }
 
+  function normalizeCategoryGroup(category) {
+    return String(category?.group || category?.groupLabel || '自定义')
+  }
+
+  function minimalCategoryForExport(category, forceLabel = false) {
+    const group = normalizeCategoryGroup(category)
+    const exported = {
+      id: category.id,
+      group,
+    }
+    if (forceLabel && category.label) exported.label = category.label
+    if (!initialCategoryGroupLabels.has(group)) exported.isNewGroup = true
+    return exported
+  }
+
+  function collectCategoriesForChanges(changes) {
+    const exportedCategories = new Map()
+    changes.categories?.forEach((category) => {
+      if (category?.id) exportedCategories.set(category.id, minimalCategoryForExport(category, true))
+    })
+    changes.upsertLocations?.forEach((location) => {
+      if (!Array.isArray(location.types)) return
+      location.types.forEach((type) => {
+        if (exportedCategories.has(type)) return
+        const category = categoryLookup.value[type]
+        if (category) exportedCategories.set(type, minimalCategoryForExport(category, sessionCreatedCategoryIds.has(type)))
+      })
+    })
+    return [...exportedCategories.values()]
+  }
+
   function exportLocationChanges(changes) {
     const payload = {
       version: 1,
       type: 'location-changes',
     }
-    if (changes.categories?.length) payload.categories = changes.categories
-    if (changes.upsertLocations?.length) payload.upsertLocations = changes.upsertLocations
-    if (changes.deletedLocationIds?.length) payload.deletedLocationIds = changes.deletedLocationIds
+    const exportCategories = collectCategoriesForChanges(changes)
+    if (exportCategories.length) payload.categories = exportCategories
+    if (changes.upsertLocations?.length) payload.upsertLocations = clone(changes.upsertLocations)
+    if (changes.deletedLocationIds?.length) payload.deletedLocationIds = [...changes.deletedLocationIds]
     downloadJson(payload, `MaaNTE-location-changes-${new Date().toISOString().slice(0, 10)}.json`)
     showStatus('点位修改 JSON 已导出')
   }
@@ -850,6 +893,7 @@ export function useMapApp() {
   }
 
   function applyNavigationEndpoint() {
+    navigationProtocol.value = normalizeNavigationProtocol(navigationProtocol.value)
     navigationHost.value = normalizeNavigationHost(navigationHost.value)
     navigationPort.value = normalizeNavigationPort(navigationPort.value)
     persistMarkerFilters()
@@ -991,7 +1035,12 @@ export function useMapApp() {
   function normalizeLocationChanges(payload) {
     if (!payload || payload.type !== 'location-changes') throw new Error('invalid location changes')
     const categories = Array.isArray(payload.categories)
-      ? payload.categories.filter((category) => category && typeof category === 'object' && typeof category.id === 'string')
+      ? payload.categories
+          .filter((category) => category && typeof category === 'object' && typeof category.id === 'string')
+          .map((category) => ({
+            ...category,
+            group: normalizeCategoryGroup(category),
+          }))
       : []
     const upsertLocations = Array.isArray(payload.upsertLocations)
       ? payload.upsertLocations.filter((location) => location && typeof location === 'object' && typeof location.id === 'string')
@@ -1010,8 +1059,26 @@ export function useMapApp() {
       const changes = normalizeLocationChanges(JSON.parse(await file.text()))
       changes.categories.forEach((category) => {
         const index = categories.value.findIndex((item) => item.id === category.id)
-        if (index >= 0) mapData.value.categories.splice(index, 1, category)
-        else mapData.value.categories.push(category)
+        const { id, group, label, icon, iconUrl, color, isDefault, isHidden } = category
+        if (index >= 0) {
+          const current = categories.value[index]
+          mapData.value.categories.splice(index, 1, {
+            ...current,
+            group,
+            ...(label ? { label } : {}),
+          })
+        } else {
+          mapData.value.categories.push({
+            id,
+            group,
+            label: label || id,
+            icon: icon || '·',
+            ...(iconUrl ? { iconUrl } : {}),
+            color: color || '#87a9ff',
+            isDefault: Boolean(isDefault),
+            ...(typeof isHidden === 'boolean' ? { isHidden } : {}),
+          })
+        }
       })
       changes.upsertLocations.forEach((location) => {
         const index = locations.value.findIndex((item) => item.id === location.id)
@@ -1109,7 +1176,12 @@ export function useMapApp() {
   // 点位编辑器：新增、编辑、删除和图片上传。
   function openCreateLocation(point) {
     editingLocationId.value = null
-    locationForm.value = { ...emptyLocationForm(), ...point, types: visibleCategories.value.length ? [visibleCategories.value[0].id] : [] }
+    locationForm.value = {
+      ...emptyLocationForm(),
+      ...point,
+      district: districtOptions.value.includes(point?.district) ? point.district : '全地图',
+      types: visibleCategories.value.length ? [visibleCategories.value[0].id] : [],
+    }
     editorFormOpen.value = true
   }
 
@@ -1118,6 +1190,10 @@ export function useMapApp() {
     locationForm.value = {
       ...emptyLocationForm(),
       ...clone(location),
+      locationId: location.id,
+      district: districtOptions.value.includes(normalizeDistrictLabel(location.district))
+        ? normalizeDistrictLabel(location.district)
+        : '全地图',
       tagsText: location.tags.join(', '),
       images: [...location.images],
     }
@@ -1157,15 +1233,20 @@ export function useMapApp() {
       showStatus('请填写名称并选择至少一个类型')
       return
     }
+    const isNewLocation = !editingLocationId.value
+    const locationId = editingLocationId.value || form.locationId.trim() || `local-${Date.now()}`
+    if (isNewLocation && locations.value.some((location) => location.id === locationId)) {
+      showStatus('点位 ID 已存在')
+      return
+    }
     const addedCategories = clone(form.pendingCustomTypes)
     mapData.value.categories.push(...addedCategories)
     addedCategories.forEach((category) => sessionCreatedCategoryIds.add(category.id))
-    const isNewLocation = !editingLocationId.value
     const saved = {
-      id: editingLocationId.value || `local-${Date.now()}`,
+      id: locationId,
       name: form.name.trim(),
       types: [...form.types],
-      district: form.district.trim() || '全地图',
+      district: districtOptions.value.includes(form.district) ? form.district : '全地图',
       lat: Number(form.lat),
       lng: Number(form.lng),
       description: form.description.trim(),
@@ -1218,10 +1299,11 @@ export function useMapApp() {
     const files = [...event.target.files]
     for (const file of files) {
       try {
+        const dataUrl = await readFileAsDataUrl(file)
         const response = await fetch('/api/upload-image', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ dataUrl: await readFileAsDataUrl(file), name: file.name }),
+          body: JSON.stringify({ dataUrl, name: file.name }),
         })
         const data = await response.json()
         if (!data.ok) throw new Error(data.error)
@@ -1320,6 +1402,12 @@ export function useMapApp() {
   watch(activeDistricts, persistMarkerFilters, { deep: true })
   watch(activeRouteId, () => nextTick(renderRouteArrows))
   watch([() => [...activeCategories.value], keepTeleportEnabled, showIncompleteOnly, showFavoritesOnly], persistMarkerFilters)
+  watch(editorMode, () => {
+    if (!editorMode.value) showPendingLocationChangesOnly.value = false
+  })
+  watch(pendingLocationFilterCount, () => {
+    if (!pendingLocationFilterCount.value) showPendingLocationChangesOnly.value = false
+  })
   watch(mergeAdjacentLocationsEnabled, () => {
     persistMarkerFilters()
     rebuildMarkerLayer()
@@ -1462,6 +1550,7 @@ export function useMapApp() {
     navigationWebSocketUrl,
     openEditLocation,
     pendingLocationChangeCount,
+    pendingLocationFilterCount,
     previewImage,
     progress,
     publicAssetUrl,
@@ -1479,6 +1568,7 @@ export function useMapApp() {
     segmentPoints,
     showFavoritesOnly,
     showIncompleteOnly,
+    showPendingLocationChangesOnly,
     sidebarCollapsed,
     startSegment,
     statusMessage,

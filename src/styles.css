@@ -1466,9 +1466,34 @@ kbd {
 .editor-form {
   width: min(580px, 100%);
   max-height: 92vh;
-  padding: 18px;
+  padding: 18px 18px 0;
   overflow-y: auto;
   border-radius: 9px;
+  scrollbar-color: rgba(117, 196, 186, 0.42) rgba(12, 33, 35, 0.35);
+  scrollbar-width: thin;
+}
+
+.editor-form::-webkit-scrollbar,
+.type-picker::-webkit-scrollbar {
+  width: 5px;
+}
+
+.editor-form::-webkit-scrollbar-track,
+.type-picker::-webkit-scrollbar-track {
+  border-radius: 5px;
+  background: rgba(12, 33, 35, 0.35);
+}
+
+.editor-form::-webkit-scrollbar-thumb,
+.type-picker::-webkit-scrollbar-thumb {
+  border: 1px solid rgba(4, 15, 17, 0.62);
+  border-radius: 5px;
+  background: rgba(117, 196, 186, 0.42);
+}
+
+.editor-form::-webkit-scrollbar-thumb:hover,
+.type-picker::-webkit-scrollbar-thumb:hover {
+  background: rgba(123, 235, 220, 0.58);
 }
 
 .editor-form > label,
@@ -1481,14 +1506,68 @@ kbd {
 }
 
 .editor-form input,
-.editor-form textarea {
+.editor-form textarea,
+.editor-form select {
   width: 100%;
-  padding: 8px;
+  min-height: 36px;
+  padding: 8px 10px;
   color: #eafffa;
   border: 1px solid rgba(143, 208, 201, 0.18);
   border-radius: 4px;
   outline: 0;
-  background: rgba(0, 9, 11, 0.3);
+  background: rgba(0, 9, 11, 0.38);
+  transition: border-color 150ms ease, background 150ms ease, box-shadow 150ms ease;
+}
+
+.editor-form textarea {
+  min-height: 82px;
+  resize: vertical;
+}
+
+.editor-form select {
+  appearance: none;
+  padding-right: 34px;
+  background:
+    linear-gradient(45deg, transparent 50%, #9acac4 50%) calc(100% - 17px) 15px / 6px 6px no-repeat,
+    linear-gradient(135deg, #9acac4 50%, transparent 50%) calc(100% - 11px) 15px / 6px 6px no-repeat,
+    rgba(0, 9, 11, 0.38);
+}
+
+.editor-form select option {
+  color: #eafffa;
+  background: #071719;
+}
+
+.editor-form input:focus,
+.editor-form textarea:focus,
+.editor-form select:focus {
+  border-color: rgba(123, 235, 220, 0.5);
+  background-color: rgba(4, 24, 27, 0.62);
+  box-shadow: 0 0 0 2px rgba(88, 170, 159, 0.13);
+}
+
+.editor-form input:disabled {
+  cursor: not-allowed;
+  color: #91aaa6;
+  border-color: rgba(143, 208, 201, 0.1);
+  background: rgba(80, 96, 96, 0.12);
+}
+
+.editor-form input[type='file'] {
+  min-height: auto;
+  padding: 7px;
+  color: #a9c5c1;
+}
+
+.editor-form input[type='file']::file-selector-button {
+  margin-right: 10px;
+  padding: 6px 10px;
+  color: #d9fffa;
+  border: 1px solid rgba(123, 235, 220, 0.28);
+  border-radius: 4px;
+  background: rgba(78, 170, 160, 0.24);
+  font: inherit;
+  cursor: pointer;
 }
 
 .form-grid {
@@ -1500,19 +1579,39 @@ kbd {
 .type-picker {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 5px;
+  gap: 6px;
   max-height: 180px;
   overflow-y: auto;
+  padding: 2px 2px 4px;
+  scrollbar-color: rgba(117, 196, 186, 0.42) rgba(12, 33, 35, 0.35);
+  scrollbar-width: thin;
 }
 
 .type-picker label {
   display: flex;
   align-items: center;
-  gap: 5px;
+  min-width: 0;
+  gap: 7px;
+  padding: 7px 8px;
+  color: #c8e4e0;
+  border: 1px solid rgba(143, 208, 201, 0.14);
+  border-radius: 4px;
+  background: rgba(39, 77, 75, 0.14);
+  cursor: pointer;
 }
 
 .type-picker input {
-  width: auto;
+  width: 13px;
+  height: 13px;
+  min-height: 0;
+  flex: 0 0 auto;
+  accent-color: #73d6ca;
+}
+
+.type-picker label:has(input:checked) {
+  color: #eafffb;
+  border-color: rgba(123, 235, 220, 0.36);
+  background: rgba(78, 170, 160, 0.24);
 }
 
 .custom-type-editor {
@@ -1541,16 +1640,6 @@ kbd {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 7px;
-}
-
-.custom-type-row select {
-  width: 100%;
-  padding: 8px;
-  color: #eafffa;
-  border: 1px solid rgba(143, 208, 201, 0.18);
-  border-radius: 4px;
-  outline: 0;
-  background: #071719;
 }
 
 .custom-type-editor button {
@@ -1587,6 +1676,7 @@ kbd {
 .form-images img {
   width: 74px;
   height: 50px;
+  border: 1px solid rgba(143, 208, 201, 0.22);
   border-radius: 4px;
   object-fit: cover;
 }

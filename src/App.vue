@@ -71,6 +71,7 @@ const {
   navigationWebSocketUrl,
   openEditLocation,
   pendingLocationChangeCount,
+  pendingLocationFilterCount,
   previewImage,
   progress,
   publicAssetUrl,
@@ -88,6 +89,7 @@ const {
   segmentPoints,
   showFavoritesOnly,
   showIncompleteOnly,
+  showPendingLocationChangesOnly,
   sidebarCollapsed,
   startSegment,
   statusMessage,
@@ -130,6 +132,15 @@ const {
         <button v-if="editorMode" type="button" @click="locationChangesImportInput?.click()">导入点位修改</button>
         <button v-if="editorMode" type="button" :disabled="!pendingLocationChangeCount" @click="exportPendingLocationChanges">
           导出点位修改<span v-if="pendingLocationChangeCount">（{{ pendingLocationChangeCount }}）</span>
+        </button>
+        <button
+          v-if="editorMode"
+          type="button"
+          :class="{ 'toolbar-button--active': showPendingLocationChangesOnly }"
+          :disabled="!pendingLocationFilterCount"
+          @click="showPendingLocationChangesOnly = !showPendingLocationChangesOnly"
+        >
+          当前修改<span v-if="pendingLocationFilterCount">（{{ pendingLocationFilterCount }}）</span>
         </button>
         <input ref="locationChangesImportInput" class="toolbar-file-input" type="file" accept="application/json,.json" @change="importLocationChanges" />
         <button :class="{ 'toolbar-button--active': routePanelOpen }" type="button" @click="routePanelOpen = !routePanelOpen">
@@ -384,8 +395,11 @@ const {
     <div v-if="editorFormOpen" class="modal-backdrop" @click.self="editorFormOpen = false">
       <form class="editor-form glass-panel" @submit.prevent="saveLocation">
         <div class="sidebar-heading"><h2>{{ editingLocationId ? '编辑点位' : '新建点位' }}</h2><button type="button" class="close-button" @click="editorFormOpen = false">×</button></div>
+        <label>点位 ID<input v-model.trim="locationForm.locationId" :disabled="!!editingLocationId" placeholder="留空自动生成 local ID" /></label>
         <label>名称<input v-model="locationForm.name" required /></label>
-        <label>区域<input v-model="locationForm.district" placeholder="全地图" /></label>
+        <label>区域<select v-model="locationForm.district">
+          <option v-for="district in districtOptions" :key="district" :value="district">{{ district }}</option>
+        </select></label>
         <div class="form-grid"><label>LAT<input v-model.number="locationForm.lat" type="number" step="any" /></label><label>LNG<input v-model.number="locationForm.lng" type="number" step="any" /></label></div>
         <label>描述<textarea v-model="locationForm.description" rows="3" /></label>
         <label>搜索关键词（可选）<input v-model="locationForm.tagsText" placeholder="使用英文逗号分隔，用于辅助搜索" /></label>

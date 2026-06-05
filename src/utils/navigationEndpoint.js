@@ -1,16 +1,21 @@
 import { DEFAULT_NAVIGATION_WEBSOCKET_URL } from '../constants/mapApp'
 
-// 把 ws://host:port 拆成表单可编辑的主机和端口。
+// 把 ws://host:port 或 wss://host:port 拆成表单可编辑的协议、主机和端口。
 export function parseNavigationWebSocketUrl(url = DEFAULT_NAVIGATION_WEBSOCKET_URL) {
   try {
     const parsed = new URL(url)
     return {
+      protocol: parsed.protocol === 'wss:' ? 'wss' : 'ws',
       host: parsed.hostname || '127.0.0.1',
       port: parsed.port || '14514',
     }
   } catch {
-    return { host: '127.0.0.1', port: '14514' }
+    return { protocol: 'ws', host: '127.0.0.1', port: '14514' }
   }
+}
+
+export function normalizeNavigationProtocol(value) {
+  return value === 'wss' ? 'wss' : parseNavigationWebSocketUrl().protocol
 }
 
 export function normalizeNavigationHost(value) {
