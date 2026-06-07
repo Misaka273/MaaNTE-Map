@@ -1,5 +1,7 @@
 <script setup>
+import { computed, ref } from 'vue'
 import { useMapApp } from './composables/useMapApp'
+import announcement from './data/announcements.json'
 
 // App.vue 保留页面结构，所有交互状态和业务动作都由组合函数提供。
 const {
@@ -108,6 +110,35 @@ const {
   visibleCounts,
   visibleLocationIds,
 } = useMapApp()
+
+const announcementPanelOpen = ref(true)
+
+const normalizeAnnouncementUrl = (value) => {
+  if (typeof value !== 'string') {
+    return ''
+  }
+
+  const trimmedValue = value.trim()
+
+  if (!/^https?:\/\//i.test(trimmedValue)) {
+    return ''
+  }
+
+  try {
+    const url = new URL(trimmedValue)
+
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : ''
+  } catch {
+    return ''
+  }
+}
+
+const announcementItems = computed(() =>
+  (announcement.items || []).map((item) => ({
+    ...item,
+    quickUrl: normalizeAnnouncementUrl(item.url || item.body),
+  })),
+)
 </script>
 
 <template>
@@ -320,43 +351,79 @@ const {
       </div>
     </aside>
 
-    <aside v-if="routePanelOpen" class="route-panel glass-panel">
-      <div class="sidebar-heading">
-        <div><p class="eyebrow">ROUTES</p><h2>路线规划</h2></div>
-        <button v-if="editorMode" type="button" class="text-button" @click="createRoute">+ 新建</button>
-      </div>
-      <div class="route-file-actions">
-        <button type="button" @click="routeImportInput?.click()">导入 JSON</button>
-        <button type="button" :disabled="!routes.length" @click="exportRoutes">导出 JSON</button>
-        <input ref="routeImportInput" type="file" accept="application/json,.json" @change="importRoutes" />
-      </div>
-      <div class="route-list">
-        <button v-for="route in routes" :key="route.id" type="button" :class="{ active: activeRouteId === route.id, hidden: route.isHidden }" @click="toggleRouteVisibility(route)">
-          <span>{{ route.name }}</span><small>{{ route.isHidden ? '已隐藏' : `${route.segments.length} 个路段` }}</small>
+    <div class="right-panel-stack">
+      <aside class="announcement-panel glass-panel">
+        <button
+          class="announcement-panel__toggle"
+          type="button"
+          :aria-expanded="announcementPanelOpen"
+          @click="announcementPanelOpen = !announcementPanelOpen"
+        >
+          <span>
+            <p class="eyebrow">ANNOUNCEMENT</p>
+            <h2>{{ announcement.title }}</h2>
+          </span>
+          <i>{{ announcementPanelOpen ? '-' : '+' }}</i>
         </button>
-      </div>
-      <template v-if="activeRoute">
-        <div class="route-heading">
-          <b>{{ activeRoute.name }}</b>
-          <button v-if="editorMode" type="button" @click="deleteRoute(activeRoute)">删除路线</button>
+        <div v-show="announcementPanelOpen" class="announcement-panel__body">
+          <p v-if="announcement.subtitle" class="announcement-panel__summary">{{ announcement.subtitle }}</p>
+          <div class="announcement-list">
+            <article v-for="item in announcementItems" :key="item.title" class="announcement-item">
+              <h3>{{ item.title }}</h3>
+              <a
+                v-if="item.quickUrl"
+                class="announcement-item__link"
+                :href="item.quickUrl"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                {{ item.body || item.quickUrl }}
+              </a>
+              <p v-else>{{ item.body }}</p>
+            </article>
+          </div>
+          <small v-if="announcement.updatedAt" class="announcement-panel__date">更新：{{ announcement.updatedAt }}</small>
         </div>
-        <div v-if="isAddingSegment" class="segment-editor">
-          <span>{{ editingSegment ? `正在编辑：${editingSegment.name}` : '新路段' }}：{{ segmentPoints.length }} 个点</span>
-          <button type="button" @click="segmentPoints = segmentPoints.slice(0, -1); renderRouteArrows()">撤销</button>
-          <button type="button" @click="cancelSegment">取消</button>
-          <button type="button" :disabled="segmentPoints.length < 2" @click="finishSegment">{{ editingSegment ? '保存' : '完成' }}</button>
+      </aside>
+
+      <aside v-if="routePanelOpen" class="route-panel glass-panel">
+        <div class="sidebar-heading">
+          <div><p class="eyebrow">ROUTES</p><h2>路线规划</h2></div>
+          <button v-if="editorMode" type="button" class="text-button" @click="createRoute">+ 新建</button>
         </div>
-        <button v-else-if="editorMode" class="add-segment-button" type="button" @click="startSegment">+ 添加路段</button>
-        <div class="segment-list">
-          <button v-for="segment in activeRoute.segments" :key="segment.id" type="button" :class="{ hidden: segment.isHidden }" @click="toggleSegmentVisibility(segment)">
-            <span>{{ segment.name }}</span><small>{{ segment.isHidden ? '已隐藏' : `${getSegmentPoints(segment).length} 个点` }}</small>
-            <i v-if="editorMode" @click.stop="editSegment(segment)">编辑</i>
-            <i v-if="editorMode" @click.stop="deleteSegment(segment)">×</i>
+        <div class="route-file-actions">
+          <button type="button" @click="routeImportInput?.click()">导入 JSON</button>
+          <button type="button" :disabled="!routes.length" @click="exportRoutes">导出 JSON</button>
+          <input ref="routeImportInput" type="file" accept="application/json,.json" @change="importRoutes" />
+        </div>
+        <div class="route-list">
+          <button v-for="route in routes" :key="route.id" type="button" :class="{ active: activeRouteId === route.id, hidden: route.isHidden }" @click="toggleRouteVisibility(route)">
+            <span>{{ route.name }}</span><small>{{ route.isHidden ? '已隐藏' : `${route.segments.length} 个路段` }}</small>
           </button>
         </div>
-      </template>
-      <p v-else class="empty-copy">选择路线后可查看路段。</p>
-    </aside>
+        <template v-if="activeRoute">
+          <div class="route-heading">
+            <b>{{ activeRoute.name }}</b>
+            <button v-if="editorMode" type="button" @click="deleteRoute(activeRoute)">删除路线</button>
+          </div>
+          <div v-if="isAddingSegment" class="segment-editor">
+            <span>{{ editingSegment ? `正在编辑：${editingSegment.name}` : '新路段' }}：{{ segmentPoints.length }} 个点</span>
+            <button type="button" @click="segmentPoints = segmentPoints.slice(0, -1); renderRouteArrows()">撤销</button>
+            <button type="button" @click="cancelSegment">取消</button>
+            <button type="button" :disabled="segmentPoints.length < 2" @click="finishSegment">{{ editingSegment ? '保存' : '完成' }}</button>
+          </div>
+          <button v-else-if="editorMode" class="add-segment-button" type="button" @click="startSegment">+ 添加路段</button>
+          <div class="segment-list">
+            <button v-for="segment in activeRoute.segments" :key="segment.id" type="button" :class="{ hidden: segment.isHidden }" @click="toggleSegmentVisibility(segment)">
+              <span>{{ segment.name }}</span><small>{{ segment.isHidden ? '已隐藏' : `${getSegmentPoints(segment).length} 个点` }}</small>
+              <i v-if="editorMode" @click.stop="editSegment(segment)">编辑</i>
+              <i v-if="editorMode" @click.stop="deleteSegment(segment)">×</i>
+            </button>
+          </div>
+        </template>
+        <p v-else class="empty-copy">选择路线后可查看路段。</p>
+      </aside>
+    </div>
 
     <section v-if="selectedLocation" class="detail-card glass-panel">
       <button class="close-button" type="button" aria-label="关闭详情" @click="selectedLocation = null">×</button>
