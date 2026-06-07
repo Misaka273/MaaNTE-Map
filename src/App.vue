@@ -18,6 +18,7 @@ const {
   cancelSegment,
   categoryLookup,
   centerNavigationEnabled,
+  clearNavigationRoute,
   clearCategories,
   clearCompleted,
   clearCompletedConfirming,
@@ -71,6 +72,7 @@ const {
   navigationConnectionStatus,
   navigationHost,
   navigationPort,
+  navigationRouteSendEnabled,
   navigationState,
   navigationWebSocketUrl,
   openEditLocation,
@@ -91,12 +93,16 @@ const {
   selectAllCategories,
   selectedLocation,
   segmentPoints,
+  sendRouteToNavigation,
+  sendSegmentToNavigation,
   showFavoritesOnly,
   showIncompleteOnly,
   showPendingLocationChangesOnly,
   sidebarCollapsed,
+  startNavigationRoute,
   startSegment,
   statusMessage,
+  stopNavigationRoute,
   toggleCategory,
   toggleCategoryGroup,
   toggleCategoryGroupSelection,
@@ -406,6 +412,15 @@ const announcementItems = computed(() =>
             <b>{{ activeRoute.name }}</b>
             <button v-if="editorMode" type="button" @click="deleteRoute(activeRoute)">删除路线</button>
           </div>
+          <div class="route-file-actions">
+            <button type="button" :disabled="!navigationRouteSendEnabled" @click="sendRouteToNavigation(activeRoute)">发送整条路线</button>
+            <button type="button" :disabled="!navigationRouteSendEnabled" @click="startNavigationRoute">开始</button>
+            <button type="button" :disabled="!navigationRouteSendEnabled" @click="stopNavigationRoute">暂停</button>
+            <button type="button" :disabled="!navigationRouteSendEnabled" @click="clearNavigationRoute">清空服务端</button>
+          </div>
+          <small v-if="navigationState.route" class="route-server-status">
+            服务端：{{ navigationState.route.status }} {{ navigationState.route.currentIndex || 0 }}/{{ navigationState.route.waypoints?.length || 0 }}
+          </small>
           <div v-if="isAddingSegment" class="segment-editor">
             <span>{{ editingSegment ? `正在编辑：${editingSegment.name}` : '新路段' }}：{{ segmentPoints.length }} 个点</span>
             <button type="button" @click="segmentPoints = segmentPoints.slice(0, -1); renderRouteArrows()">撤销</button>
@@ -416,6 +431,7 @@ const announcementItems = computed(() =>
           <div class="segment-list">
             <button v-for="segment in activeRoute.segments" :key="segment.id" type="button" :class="{ hidden: segment.isHidden }" @click="toggleSegmentVisibility(segment)">
               <span>{{ segment.name }}</span><small>{{ segment.isHidden ? '已隐藏' : `${getSegmentPoints(segment).length} 个点` }}</small>
+              <i @click.stop="sendSegmentToNavigation(segment)">发送</i>
               <i v-if="editorMode" @click.stop="editSegment(segment)">编辑</i>
               <i v-if="editorMode" @click.stop="deleteSegment(segment)">×</i>
             </button>
@@ -456,7 +472,7 @@ const announcementItems = computed(() =>
 
     <div class="map-hud glass-panel">
       <button type="button" @click="resetView">重置视野</button>
-      <span>LAT {{ coordinates.lat.toFixed(2) }}</span><span>LNG {{ coordinates.lng.toFixed(2) }}</span>
+      <span>ML X {{ coordinates.pixelX.toFixed(0) }}</span><span>ML Y {{ coordinates.pixelY.toFixed(0) }}</span>
       <span class="navigation-status" :class="`navigation-status--${navigationConnectionStatus}`">NAVI {{ navigationConnectionLabel }}</span>
       <span v-if="navigationState.position">POS {{ navigationState.position.pixelX.toFixed(0) }}, {{ navigationState.position.pixelY.toFixed(0) }}</span>
       <span v-if="navigationState.angle !== null">ANGLE {{ navigationState.angle.toFixed(1) }}°</span>
