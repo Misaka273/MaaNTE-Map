@@ -344,6 +344,7 @@ kbd {
 
 .sidebar-toggle {
   position: absolute;
+  z-index: 1;
   top: 18px;
   right: -30px;
   width: 30px;
@@ -1935,6 +1936,7 @@ kbd {
     bottom: 12px;
     left: 12px;
     width: 292px;
+    z-index: 730;
   }
 
   .detail-card {
