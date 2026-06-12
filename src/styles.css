@@ -1192,6 +1192,7 @@ kbd {
 
 .navigation-arrow-shell {
   background: transparent;
+  pointer-events: none;
 }
 
 .navigation-arrow {
@@ -1200,6 +1201,7 @@ kbd {
   height: 35px;
   align-items: center;
   justify-content: center;
+  contain: layout paint;
 }
 
 .navigation-arrow img {
@@ -1207,8 +1209,11 @@ kbd {
   height: 35px;
   filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.65));
   image-rendering: pixelated;
+  backface-visibility: hidden;
+  transform: translateZ(0) rotate(0deg);
   transform-origin: 50% 50%;
-  transition: transform 100ms linear;
+  transition: transform 50ms linear;
+  will-change: transform;
 }
 
 .navigation-arrow--angle-missing {

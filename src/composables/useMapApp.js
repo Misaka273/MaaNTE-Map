@@ -193,6 +193,12 @@ export function useMapApp() {
   let navigationDisplayAngle = null
   let navigationFollowFrame = 0
   let navigationFollowLatLng = null
+  let navigationRenderFrame = 0
+  let pendingNavigationState = null
+  let navigationArrowElement = null
+  let navigationArrowImage = null
+  let navigationMarkerVisible = false
+  let navigationAngleMissing = null
   let districtAutoFitReady = false
   let mapViewPersistenceReady = false
   let skipNextDistrictAutoFit = false
@@ -912,8 +918,22 @@ export function useMapApp() {
       const delta = ((angle - navigationDisplayAngle + 540) % 360) - 180
       navigationDisplayAngle += delta
     }
-    const image = navigationMarker?.getElement()?.querySelector('.navigation-arrow img')
-    if (image) image.style.transform = `rotate(${navigationDisplayAngle}deg)`
+    if (navigationArrowImage) {
+      navigationArrowImage.style.transform = `translateZ(0) rotate(${navigationDisplayAngle}deg)`
+    }
+  }
+
+  function cacheNavigationMarkerElements() {
+    const markerElement = navigationMarker?.getElement()
+    if (!markerElement) {
+      navigationArrowElement = null
+      navigationArrowImage = null
+      return
+    }
+    if (!navigationArrowElement || !markerElement.contains(navigationArrowElement)) {
+      navigationArrowElement = markerElement.querySelector('.navigation-arrow')
+      navigationArrowImage = markerElement.querySelector('.navigation-arrow img')
+    }
   }
 
   function stopNavigationFollow(persist = true) {
@@ -958,13 +978,16 @@ export function useMapApp() {
     }
   }
 
-  function renderNavigationArrow() {
-    if (!map || !navigationState.value.position) {
-      navigationMarker?.setOpacity(0)
+  function renderNavigationArrow(state = navigationState.value) {
+    if (!map || !state.position) {
+      if (navigationMarkerVisible) {
+        navigationMarker?.setOpacity(0)
+        navigationMarkerVisible = false
+      }
       stopNavigationFollow()
       return
     }
-    const latlng = mapPixelToMapLatLng(navigationState.value.position)
+    const latlng = mapPixelToMapLatLng(state.position)
     if (!navigationMarker) {
       navigationMarker = L.marker(latlng, {
         icon: createNavigationIcon(),
@@ -972,18 +995,51 @@ export function useMapApp() {
         keyboard: false,
         zIndexOffset: 1000000,
       }).addTo(map)
+      navigationArrowElement = null
+      navigationArrowImage = null
+      navigationAngleMissing = null
     }
+    cacheNavigationMarkerElements()
     navigationMarker.setLatLng(latlng)
-    navigationMarker.setOpacity(1)
-    centerNavigationMarker(latlng)
-    const arrow = navigationMarker.getElement()?.querySelector('.navigation-arrow')
-    if (arrow) {
-      arrow.classList.toggle('navigation-arrow--angle-missing', navigationState.value.angle === null)
+    if (!navigationMarkerVisible) {
+      navigationMarker.setOpacity(1)
+      navigationMarkerVisible = true
     }
-    updateNavigationMarkerAngle(navigationState.value.angle)
+    centerNavigationMarker(latlng)
+    const angleMissing = state.angle === null
+    if (navigationArrowElement && navigationAngleMissing !== angleMissing) {
+      navigationArrowElement.classList.toggle('navigation-arrow--angle-missing', angleMissing)
+      navigationAngleMissing = angleMissing
+    }
+    updateNavigationMarkerAngle(state.angle)
+  }
+
+  function flushNavigationRender() {
+    navigationRenderFrame = 0
+    if (!pendingNavigationState) return
+    navigationState.value = pendingNavigationState
+    pendingNavigationState = null
+    renderNavigationArrow()
+  }
+
+  function scheduleNavigationRender(state) {
+    pendingNavigationState = state
+    if (!navigationRenderFrame) {
+      navigationRenderFrame = window.requestAnimationFrame(flushNavigationRender)
+    }
+  }
+
+  function getCurrentNavigationState() {
+    return pendingNavigationState || navigationState.value
   }
 
   function clearNavigationState() {
+    if (navigationRenderFrame) {
+      window.cancelAnimationFrame(navigationRenderFrame)
+      navigationRenderFrame = 0
+    }
+    pendingNavigationState = null
+    navigationAngleMissing = null
     navigationState.value = {
       position: null,
       angle: null,
@@ -999,10 +1055,12 @@ export function useMapApp() {
       const payload = JSON.parse(event.data)
       if (payload.type === 'navi-route-ack') {
         if (payload.route) {
-          navigationState.value = {
-            ...navigationState.value,
+          const nextState = {
+            ...getCurrentNavigationState(),
             route: payload.route,
           }
+          if (pendingNavigationState) pendingNavigationState = nextState
+          else navigationState.value = nextState
         }
         if (payload.message) showStatus(payload.message)
         return
@@ -1017,7 +1075,8 @@ export function useMapApp() {
       const sourceWidth = Number(payload.position?.sourceWidth)
       const sourceHeight = Number(payload.position?.sourceHeight)
       const angle = Number(payload.angle)
-      navigationState.value = {
+      const currentState = getCurrentNavigationState()
+      scheduleNavigationRender({
         position: Number.isFinite(pixelX) && Number.isFinite(pixelY)
           ? {
               pixelX,
@@ -1028,9 +1087,8 @@ export function useMapApp() {
           : null,
         angle: payload.angle !== null && Number.isFinite(angle) ? angle : null,
         angleConfidence: Number(payload.angleConfidence) || 0,
-        route: payload.route || navigationState.value.route || null,
-      }
-      renderNavigationArrow()
+        route: payload.route || currentState.route || null,
+      })
     } catch {
       // 单条导航消息格式错误时忽略，避免中断后续本地数据流。
     }
@@ -1723,9 +1781,14 @@ export function useMapApp() {
   onUnmounted(() => {
     navigationClientStopped = true
     if (navigationReconnectTimer) window.clearTimeout(navigationReconnectTimer)
+    if (navigationRenderFrame) window.cancelAnimationFrame(navigationRenderFrame)
     navigationSocket?.close()
     stopNavigationFollow(false)
     navigationMarker?.remove()
+    navigationArrowElement = null
+    navigationArrowImage = null
+    navigationMarkerVisible = false
+    navigationAngleMissing = null
     window.removeEventListener('keydown', handleKeydown)
     map?.remove()
   })
