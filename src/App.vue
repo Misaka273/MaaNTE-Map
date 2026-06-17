@@ -341,6 +341,7 @@ const announcementItems = computed(() =>
           </label>
           <div v-if="realtimeNavigationEnabled" class="navigation-endpoint-row">
             <span><b>监听地址</b><small>{{ navigationWebSocketUrl }}</small></span>
+            <p class="navigation-endpoint-warning">除非明确知道此项用途，否则请保持默认设置。</p>
             <div class="navigation-endpoint-fields">
               <label>
                 <span>IP</span>

@@ -918,6 +918,13 @@ kbd {
   word-break: break-all;
 }
 
+.navigation-endpoint-warning {
+  margin: -3px 0 0;
+  color: #ff6f6f;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 .navigation-endpoint-fields {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 82px;
