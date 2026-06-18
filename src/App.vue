@@ -1,6 +1,9 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import L from 'leaflet'
 import { useMapApp } from './composables/useMapApp'
+import { MAP_HEIGHT, MAP_WIDTH, TILE_SIZE, mapPixelToMapLatLng, worldToMapLatLng } from './data/locations'
+import { INITIAL_ZOOM, MIN_ZOOM } from './constants/mapApp'
 import announcement from './data/announcements.json'
 
 // App.vue 保留页面结构，所有交互状态和业务动作都由组合函数提供。
@@ -67,6 +70,7 @@ const {
   locationChangesImportInput,
   locationForm,
   mapElement,
+  mapView,
   mergeAdjacentLocationsEnabled,
   navigationConnectionLabel,
   navigationConnectionStatus,
@@ -145,6 +149,379 @@ const announcementItems = computed(() =>
     quickUrl: normalizeAnnouncementUrl(item.url || item.body),
   })),
 )
+
+const pictureInPictureWindow = ref(null)
+const pictureInPictureError = ref('')
+let pictureInPictureMap = null
+let pictureInPictureMarkerLayer = null
+let pictureInPictureNavigationMarker = null
+let pictureInPictureViewFrame = 0
+
+const isPictureInPictureOpen = computed(() =>
+  Boolean(pictureInPictureWindow.value && !pictureInPictureWindow.value.closed),
+)
+
+const isDocumentPictureInPictureSupported = computed(() =>
+  typeof window !== 'undefined' && 'documentPictureInPicture' in window,
+)
+
+const pictureInPictureButtonLabel = computed(() =>
+  isPictureInPictureOpen.value ? '关闭小窗' : '悬浮小窗',
+)
+
+const injectPictureInPictureStyles = (doc) => {
+  const copiedStyleNodes = [...document.querySelectorAll('link[rel="stylesheet"], style')]
+    .map((node) => node.cloneNode(true))
+  const style = doc.createElement('style')
+  style.textContent = `
+    :root {
+      color: #f5fffd;
+      background: #071112;
+      font-family: 'Microsoft YaHei UI', 'Microsoft YaHei', Arial, sans-serif;
+      font-synthesis: none;
+      text-rendering: optimizeLegibility;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      width: 100vw;
+      min-width: 0;
+      height: 100vh;
+      margin: 0;
+      overflow: hidden;
+      background: #000;
+    }
+
+    #pip-map {
+      width: 100vw;
+      height: 100vh;
+      background: #000;
+    }
+
+    #pip-map::after {
+      position: absolute;
+      z-index: 400;
+      inset: 0;
+      pointer-events: none;
+      content: '';
+      background:
+        linear-gradient(90deg, rgba(0, 0, 0, 0.3), transparent 22%, transparent 78%, rgba(0, 0, 0, 0.3)),
+        linear-gradient(rgba(0, 0, 0, 0.2), transparent 18%, transparent 82%, rgba(0, 0, 0, 0.22));
+    }
+
+    .pip-map-status {
+      position: absolute;
+      z-index: 1000;
+      left: 8px;
+      bottom: 8px;
+      padding: 5px 7px;
+      color: #b8fff2;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      border-radius: 4px;
+      background: rgba(0, 0, 0, 0.72);
+      font-size: 11px;
+      font-weight: 800;
+      pointer-events: none;
+    }
+
+    .leaflet-control-container {
+      display: none;
+    }
+  `
+  doc.head.replaceChildren(...copiedStyleNodes, style)
+}
+
+const getPrimaryCategory = (location) => {
+  const visibleTypes = getVisibleTypes(location)
+  const activeType = visibleTypes.find((type) => activeCategories.value.has(type))
+
+  return categoryLookup.value[activeType || visibleTypes[0]]
+}
+
+const categoryIconHtml = (category) =>
+  category?.iconUrl ? `<img src="${publicAssetUrl(category.iconUrl)}" alt="" />` : category?.icon || '·'
+
+const createPictureInPictureMarkerIcon = (location) => {
+  const category = getPrimaryCategory(location)
+  const completed = completedIds.value.has(location.id)
+  const selected = selectedLocation.value?.id === location.id
+  const extraCount = Math.max(getVisibleTypes(location).length - 1, 0)
+
+  return L.divIcon({
+    className: 'marker-shell',
+    html: `
+      <div class="map-marker ${completed ? 'map-marker--completed' : ''} ${selected ? 'map-marker--selected' : ''}"
+        style="--marker-color:${category?.color || '#8adfd6'}">
+        <span>${categoryIconHtml(category)}</span>
+        ${extraCount ? `<b>+${extraCount}</b>` : ''}
+      </div>
+    `,
+    iconSize: [36, 44],
+    iconAnchor: [18, 42],
+  })
+}
+
+const createPictureInPictureNavigationIcon = () => L.divIcon({
+  className: 'navigation-arrow-shell',
+  html: `<div class="navigation-arrow"><img src="${publicAssetUrl('/images/map_webview_pointer.png')}" alt=""></div>`,
+  iconSize: [30, 35],
+  iconAnchor: [15, 18],
+})
+
+const getPictureInPictureTargetView = () => {
+  const state = navigationState.value
+  if (state.position) {
+    return {
+      center: mapPixelToMapLatLng(state.position),
+      zoom: mapView.value?.zoom ?? INITIAL_ZOOM,
+    }
+  }
+
+  if (mapView.value) {
+    return {
+      center: [mapView.value.center.lat, mapView.value.center.lng],
+      zoom: mapView.value.zoom,
+    }
+  }
+
+  return null
+}
+
+const syncPictureInPictureView = () => {
+  pictureInPictureViewFrame = 0
+  if (!pictureInPictureMap) return
+  const targetView = getPictureInPictureTargetView()
+  if (!targetView) return
+
+  pictureInPictureMap.setView(targetView.center, targetView.zoom, {
+    animate: false,
+    noMoveStart: true,
+  })
+  pictureInPictureMap.invalidateSize({ animate: false, pan: false })
+}
+
+const schedulePictureInPictureViewSync = () => {
+  if (!pictureInPictureMap || pictureInPictureViewFrame) return
+  pictureInPictureViewFrame = requestAnimationFrame(syncPictureInPictureView)
+}
+
+const renderPictureInPictureMarkers = () => {
+  if (!pictureInPictureMap || !pictureInPictureMarkerLayer) return
+  pictureInPictureMarkerLayer.clearLayers()
+  filteredLocations.value.forEach((location) => {
+    L.marker(worldToMapLatLng(location), {
+      icon: createPictureInPictureMarkerIcon(location),
+      title: location.name,
+      interactive: false,
+      keyboard: false,
+    }).addTo(pictureInPictureMarkerLayer)
+  })
+}
+
+const createPictureInPictureMarkerLayer = () =>
+  mergeAdjacentLocationsEnabled.value && L.markerClusterGroup
+    ? L.markerClusterGroup({
+        chunkedLoading: true,
+        maxClusterRadius: 52,
+        disableClusteringAtZoom: 0,
+        showCoverageOnHover: false,
+      })
+    : L.layerGroup()
+
+const rebuildPictureInPictureMarkerLayer = () => {
+  if (!pictureInPictureMap) return
+  pictureInPictureMarkerLayer?.clearLayers()
+  pictureInPictureMarkerLayer?.remove()
+  pictureInPictureMarkerLayer = createPictureInPictureMarkerLayer().addTo(pictureInPictureMap)
+  renderPictureInPictureMarkers()
+}
+
+const renderPictureInPictureNavigation = () => {
+  if (!pictureInPictureMap) return
+  const state = navigationState.value
+  if (!state.position) {
+    pictureInPictureNavigationMarker?.remove()
+    pictureInPictureNavigationMarker = null
+    return
+  }
+
+  const latlng = mapPixelToMapLatLng(state.position)
+  if (!pictureInPictureNavigationMarker) {
+    pictureInPictureNavigationMarker = L.marker(latlng, {
+      icon: createPictureInPictureNavigationIcon(),
+      interactive: false,
+      keyboard: false,
+      zIndexOffset: 1000000,
+    }).addTo(pictureInPictureMap)
+  } else {
+    pictureInPictureNavigationMarker.setLatLng(latlng)
+  }
+
+  const markerElement = pictureInPictureNavigationMarker.getElement()
+  const arrowElement = markerElement?.querySelector('.navigation-arrow')
+  const arrowImage = markerElement?.querySelector('.navigation-arrow img')
+  arrowElement?.classList.toggle('navigation-arrow--angle-missing', state.angle === null)
+  if (arrowImage && Number.isFinite(state.angle)) {
+    arrowImage.style.transform = `translateZ(0) rotate(${state.angle}deg)`
+  }
+  schedulePictureInPictureViewSync()
+}
+
+const renderPictureInPictureStatus = () => {
+  const pipWindow = pictureInPictureWindow.value
+  if (!pipWindow || pipWindow.closed) return
+  const status = pipWindow.document.querySelector('.pip-map-status')
+  if (status) {
+    status.textContent = `NAVI ${navigationConnectionLabel.value}`
+  }
+}
+
+const syncPictureInPictureMap = () => {
+  const pipWindow = pictureInPictureWindow.value
+  if (!pipWindow || pipWindow.closed) {
+    pictureInPictureWindow.value = null
+    return
+  }
+
+  syncPictureInPictureView()
+  renderPictureInPictureMarkers()
+  renderPictureInPictureNavigation()
+  renderPictureInPictureStatus()
+}
+
+const destroyPictureInPictureMap = () => {
+  if (pictureInPictureViewFrame) {
+    cancelAnimationFrame(pictureInPictureViewFrame)
+    pictureInPictureViewFrame = 0
+  }
+  pictureInPictureNavigationMarker?.remove()
+  pictureInPictureNavigationMarker = null
+  pictureInPictureMarkerLayer = null
+  pictureInPictureMap?.remove()
+  pictureInPictureMap = null
+}
+
+const bindPictureInPictureDragGuard = (mapContainer, pipWindow) => {
+  const blockHoverMove = (event) => {
+    if (event.buttons === 0) {
+      event.stopImmediatePropagation()
+    }
+  }
+
+  const stopDrag = () => {
+    pictureInPictureMap?.dragging.disable()
+    pictureInPictureMap?.dragging.enable()
+  }
+
+  mapContainer.addEventListener('pointermove', blockHoverMove, true)
+  mapContainer.addEventListener('mousemove', blockHoverMove, true)
+  pipWindow.addEventListener('pointerup', stopDrag)
+  pipWindow.addEventListener('mouseup', stopDrag)
+  pipWindow.addEventListener('blur', stopDrag)
+}
+
+const initializePictureInPictureMap = (pipWindow) => {
+  const { document: doc } = pipWindow
+  doc.body.replaceChildren()
+
+  const mapContainer = doc.createElement('div')
+  mapContainer.id = 'pip-map'
+  const status = doc.createElement('div')
+  status.className = 'pip-map-status'
+  mapContainer.append(status)
+  doc.body.append(mapContainer)
+  bindPictureInPictureDragGuard(mapContainer, pipWindow)
+
+  const bounds = L.latLngBounds([-MAP_HEIGHT, 0], [0, MAP_WIDTH])
+  pictureInPictureMap = L.map(mapContainer, {
+    crs: L.CRS.Simple,
+    minZoom: MIN_ZOOM,
+    maxZoom: 1,
+    maxBounds: bounds.pad(0.18),
+    zoomControl: false,
+    attributionControl: false,
+    fadeAnimation: false,
+    zoomAnimation: false,
+    markerZoomAnimation: false,
+  })
+  L.tileLayer(publicAssetUrl('/tiles/{z}/{x}/{y}.jpg'), {
+    bounds,
+    minZoom: MIN_ZOOM,
+    maxNativeZoom: 0,
+    maxZoom: 1,
+    noWrap: true,
+    tileSize: TILE_SIZE,
+    keepBuffer: 10,
+    updateWhenIdle: false,
+    updateWhenZooming: false,
+    updateInterval: 80,
+  }).addTo(pictureInPictureMap)
+  pictureInPictureMarkerLayer = createPictureInPictureMarkerLayer().addTo(pictureInPictureMap)
+  if (mapView.value) syncPictureInPictureView()
+  else pictureInPictureMap.setView(bounds.getCenter(), INITIAL_ZOOM)
+  syncPictureInPictureMap()
+  const refreshSize = () => {
+    pictureInPictureMap?.invalidateSize({ animate: false, pan: false })
+    schedulePictureInPictureViewSync()
+  }
+  requestAnimationFrame(refreshSize)
+  pipWindow.addEventListener('resize', refreshSize)
+}
+
+const toggleDocumentPictureInPicture = async () => {
+  pictureInPictureError.value = ''
+
+  if (isPictureInPictureOpen.value) {
+    destroyPictureInPictureMap()
+    pictureInPictureWindow.value.close()
+    pictureInPictureWindow.value = null
+    return
+  }
+
+  if (!isDocumentPictureInPictureSupported.value) {
+    pictureInPictureError.value = '当前浏览器不支持 Document Picture-in-Picture。'
+    return
+  }
+
+  try {
+    const pipWindow = await window.documentPictureInPicture.requestWindow({
+      width: 320,
+      height: 260,
+      preferInitialWindowPlacement: true,
+    })
+
+    pictureInPictureWindow.value = pipWindow
+    injectPictureInPictureStyles(pipWindow.document)
+    initializePictureInPictureMap(pipWindow)
+
+    pipWindow.addEventListener('pagehide', () => {
+      if (pictureInPictureWindow.value === pipWindow) {
+        destroyPictureInPictureMap()
+        pictureInPictureWindow.value = null
+      }
+    })
+  } catch (error) {
+    pictureInPictureError.value = error?.name === 'NotAllowedError'
+      ? '请通过点击按钮打开悬浮小窗。'
+      : '悬浮小窗打开失败。'
+  }
+}
+
+watch(mapView, schedulePictureInPictureViewSync, { deep: true })
+watch([navigationConnectionLabel, navigationConnectionStatus], renderPictureInPictureStatus)
+watch(navigationState, renderPictureInPictureNavigation, { deep: true })
+watch([filteredLocations, completedIds, selectedLocation, activeCategories], renderPictureInPictureMarkers, { deep: true })
+watch(mergeAdjacentLocationsEnabled, rebuildPictureInPictureMarkerLayer)
+
+onBeforeUnmount(() => {
+  destroyPictureInPictureMap()
+  if (isPictureInPictureOpen.value) {
+    pictureInPictureWindow.value.close()
+  }
+})
 </script>
 
 <template>
@@ -473,10 +850,14 @@ const announcementItems = computed(() =>
 
     <div class="map-hud glass-panel">
       <button type="button" @click="resetView">重置视野</button>
+      <button type="button" :class="{ 'map-hud-button--active': isPictureInPictureOpen }" @click="toggleDocumentPictureInPicture">
+        {{ pictureInPictureButtonLabel }}
+      </button>
       <span>ML X {{ coordinates.pixelX.toFixed(0) }}</span><span>ML Y {{ coordinates.pixelY.toFixed(0) }}</span>
       <span class="navigation-status" :class="`navigation-status--${navigationConnectionStatus}`">NAVI {{ navigationConnectionLabel }}</span>
       <span v-if="navigationState.position">POS {{ navigationState.position.pixelX.toFixed(0) }}, {{ navigationState.position.pixelY.toFixed(0) }}</span>
       <span v-if="navigationState.angle !== null">ANGLE {{ navigationState.angle.toFixed(1) }}°</span>
+      <span v-if="pictureInPictureError" class="map-hud-error">{{ pictureInPictureError }}</span>
     </div>
     <div v-if="editorMode" class="editor-tip glass-panel">编辑模式：点击地图空白处添加点位</div>
     <div v-if="statusMessage" class="status-toast glass-panel">{{ statusMessage }}</div>

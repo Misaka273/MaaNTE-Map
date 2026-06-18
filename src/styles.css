@@ -1177,6 +1177,14 @@ kbd {
   font-size: 12px;
 }
 
+.map-hud .map-hud-button--active {
+  color: #b8fff2;
+}
+
+.map-hud-error {
+  color: #ff8b8b;
+}
+
 .navigation-status {
   color: #a7a7a7;
 }

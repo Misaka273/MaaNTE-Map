@@ -123,6 +123,7 @@ export function useMapApp() {
   const navigationHost = ref(normalizeNavigationHost(storedMarkerFilters?.navigationHost || defaultNavigationEndpoint.host))
   const navigationPort = ref(normalizeNavigationPort(storedMarkerFilters?.navigationPort || defaultNavigationEndpoint.port))
   const coordinates = ref({ pixelX: 0, pixelY: 0 })
+  const mapView = ref(null)
   const sidebarCollapsed = ref(false)
   const districtFilterOpen = ref(storedMarkerFilters?.districtFilterOpen === true)
   const clearCompletedConfirming = ref(false)
@@ -1396,6 +1397,15 @@ export function useMapApp() {
     map?.setView(bounds.getCenter(), INITIAL_ZOOM)
   }
 
+  function updateMapView() {
+    if (!map) return
+    const center = map.getCenter()
+    mapView.value = {
+      center: { lat: center.lat, lng: center.lng },
+      zoom: map.getZoom(),
+    }
+  }
+
   function restoreMapView() {
     if (!map) return false
 
@@ -1766,8 +1776,12 @@ export function useMapApp() {
       else if (editorMode.value) openCreateLocation(mapLatLngToWorld(latlng))
       renderMarkers()
     })
-    map.on('moveend', persistMapView)
+    map.on('moveend zoomend', () => {
+      persistMapView()
+      updateMapView()
+    })
     if (!restoreMapView()) resetView()
+    updateMapView()
     mapElement.value.dataset.minZoom = String(map.getMinZoom())
     mapElement.value.dataset.initialZoom = String(map.getZoom())
     renderMarkers()
@@ -1858,6 +1872,7 @@ export function useMapApp() {
     locationChangesImportInput,
     locationForm,
     mapElement,
+    mapView,
     mergeAdjacentLocationsEnabled,
     moveSegmentPoint,
     navigationConnectionLabel,
