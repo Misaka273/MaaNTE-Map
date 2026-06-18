@@ -141,7 +141,7 @@
       "id": "category-014",
       "group": "怪物",
       "label": "纸翼战队",
-      "icon": "!",
+      "icon": "/icons/category-014.png",
       "color": "#ff8a70",
       "isDefault": false
     },
@@ -149,7 +149,7 @@
       "id": "feather-doll",
       "group": "怪物",
       "label": "羽偶",
-      "icon": "!",
+      "icon": "/icons/feather-doll.png",
       "color": "#ff8a70",
       "isDefault": false
     },
@@ -157,7 +157,7 @@
       "id": "demon-blade",
       "group": "怪物",
       "label": "妖刀",
-      "icon": "!",
+      "icon": "/icons/demon-blade.png",
       "color": "#ff8a70",
       "isDefault": false
     },
@@ -165,7 +165,7 @@
       "id": "category-017",
       "group": "怪物",
       "label": "无明众",
-      "icon": "!",
+      "icon": "/icons/category-017.png",
       "color": "#ff8a70",
       "isDefault": false
     },
@@ -173,7 +173,7 @@
       "id": "cardboard-castle",
       "group": "怪物",
       "label": "瓦楞城堡",
-      "icon": "!",
+      "icon": "/icons/ardboard-castle.png",
       "color": "#ff8a70",
       "isDefault": false
     },
@@ -181,7 +181,7 @@
       "id": "sunshine-doll",
       "group": "怪物",
       "label": "扫晴娘",
-      "icon": "!",
+      "icon": "/icons/sunshine-doll.png",
       "color": "#ff8a70",
       "isDefault": false
     },
@@ -189,7 +189,7 @@
       "id": "fake-phonebooth",
       "group": "怪物",
       "label": "伪电话亭",
-      "icon": "!",
+      "icon": "/icons/fake-phonebooth.png",
       "color": "#ff8a70",
       "isDefault": false
     },
@@ -197,7 +197,7 @@
       "id": "record-spirit",
       "group": "怪物",
       "label": "唱片附电灵",
-      "icon": "!",
+      "icon": "/icons/record-spirit.png",
       "color": "#ff8a70",
       "isDefault": false
     },
@@ -205,7 +205,7 @@
       "id": "vending-spirit",
       "group": "怪物",
       "label": "售货附电灵",
-      "icon": "!",
+      "icon": "/icons/vending-spirit.png",
       "color": "#ff8a70",
       "isDefault": false
     },
@@ -213,7 +213,7 @@
       "id": "dismantler",
       "group": "怪物",
       "label": "分解者",
-      "icon": "!",
+      "icon": "/icons/dismantler.png",
       "color": "#ff8a70",
       "isDefault": false
     },
@@ -221,7 +221,7 @@
       "id": "possessed",
       "group": "怪物",
       "label": "凭依种",
-      "icon": "!",
+      "icon": "/icons/possessed.png",
       "color": "#ff8a70",
       "isDefault": false
     },
@@ -229,7 +229,7 @@
       "id": "sad-bear",
       "group": "怪物",
       "label": "伤心英熊",
-      "icon": "!",
+      "icon": "/icons/sad-bear.png",
       "color": "#ff8a70",
       "isDefault": false
     },
@@ -237,7 +237,7 @@
       "id": "wind-cave",
       "group": "怪物",
       "label": "风洞种",
-      "icon": "!",
+      "icon": "/icons/wind-cave.png",
       "color": "#ff8a70",
       "isDefault": false
     },
@@ -245,7 +245,7 @@
       "id": "rain-man",
       "group": "怪物",
       "label": "雨人",
-      "icon": "!",
+      "icon": "/icons/rain-man.png",
       "color": "#ff8a70",
       "isDefault": false
     },
@@ -253,7 +253,7 @@
       "id": "eternal-lamp",
       "group": "怪物",
       "label": "长明灯",
-      "icon": "!",
+      "icon": "/icons/eternal-lamp.png",
       "color": "#ff8a70",
       "isDefault": false
     },
@@ -261,7 +261,7 @@
       "id": "lost",
       "group": "怪物",
       "label": "迷失种",
-      "icon": "!",
+      "icon": "/icons/lost.png",
       "color": "#ff8a70",
       "isDefault": false
     },
@@ -269,7 +269,7 @@
       "id": "nonos",
       "group": "怪物",
       "label": "诺诺斯",
-      "icon": "!",
+      "icon": "/icons/nonos.png",
       "color": "#ff8a70",
       "isDefault": false
     },
@@ -277,7 +277,7 @@
       "id": "mask-kite",
       "group": "怪物",
       "label": "诡面筝",
-      "icon": "!",
+      "icon": "/icons/mask-kite.png",
       "color": "#ff8a70",
       "isDefault": false
     },
@@ -285,7 +285,7 @@
       "id": "dream",
       "group": "怪物",
       "label": "流梦种",
-      "icon": "!",
+      "icon": "/icons/dream.png",
       "color": "#ff8a70",
       "isDefault": false
     },
@@ -293,7 +293,7 @@
       "id": "fish-banner",
       "group": "怪物",
       "label": "洄天鱼幡",
-      "icon": "!",
+      "icon": "/icons/fish-banner.png",
       "color": "#ff8a70",
       "isDefault": false
     },
@@ -301,7 +301,7 @@
       "id": "pop",
       "group": "怪物",
       "label": "波普",
-      "icon": "!",
+      "icon": "/icons/pop.png",
       "color": "#ff8a70",
       "isDefault": false
     },
@@ -309,7 +309,7 @@
       "id": "cotton",
       "group": "怪物",
       "label": "棉绒绒",
-      "icon": "!",
+      "icon": "/icons/cotton.png",
       "color": "#ff8a70",
       "isDefault": false
     },
@@ -317,7 +317,7 @@
       "id": "towboat",
       "group": "怪物",
       "label": "拖车艄",
-      "icon": "!",
+      "icon": "/icons/towboat.png",
       "color": "#ff8a70",
       "isDefault": false
     },
@@ -325,7 +325,7 @@
       "id": "hug-vine",
       "group": "怪物",
       "label": "抱抱藤",
-      "icon": "!",
+      "icon": "/icons/hug-vine.png",
       "color": "#ff8a70",
       "isDefault": false
     },
