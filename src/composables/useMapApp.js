@@ -1098,12 +1098,11 @@ export function useMapApp() {
         return
       }
       if (payload.type !== 'navi-state' || payload.version !== 1) return
-      const pixelX = Number(payload.position?.pixelX)
-      const pixelY = Number(payload.position?.pixelY)
-      const sourceWidth = Number(payload.position?.sourceWidth)
-      const sourceHeight = Number(payload.position?.sourceHeight)
+      const positionPayload = payload.position && typeof payload.position === 'object'
+        ? payload.position
+        : payload
       const angle = Number(payload.angle)
-      const gamePositionPayload = payload.gamePosition || payload.position?.gamePosition || {}
+      const gamePositionPayload = payload.gamePosition || positionPayload.gamePosition || {}
       const readCoordinate = (...values) => {
         for (const value of values) {
           if (value === null || value === undefined || value === '') continue
@@ -1112,17 +1111,30 @@ export function useMapApp() {
         }
         return null
       }
-      const gameX = readCoordinate(payload.position?.x, payload.position?.gameX, gamePositionPayload.x, payload.x)
-      const gameY = readCoordinate(payload.position?.y, payload.position?.gameY, gamePositionPayload.y, payload.y)
-      const gameZ = readCoordinate(payload.position?.z, payload.position?.gameZ, gamePositionPayload.z, payload.z)
+      const gameX = readCoordinate(positionPayload.x, positionPayload.gameX, gamePositionPayload.x, payload.x)
+      const gameY = readCoordinate(positionPayload.y, positionPayload.gameY, gamePositionPayload.y, payload.y)
+      const gameZ = readCoordinate(positionPayload.z, positionPayload.gameZ, gamePositionPayload.z, payload.z)
+      const receivedPixelX = readCoordinate(positionPayload.pixelX, payload.pixelX)
+      const receivedPixelY = readCoordinate(positionPayload.pixelY, payload.pixelY)
+      const receivedSourceWidth = readCoordinate(positionPayload.sourceWidth, payload.sourceWidth)
+      const receivedSourceHeight = readCoordinate(positionPayload.sourceHeight, payload.sourceHeight)
+      const sourceWidth = receivedSourceWidth > 0 ? receivedSourceWidth : MAP_LOCATOR_SOURCE_WIDTH
+      const sourceHeight = receivedSourceHeight > 0 ? receivedSourceHeight : MAP_LOCATOR_SOURCE_HEIGHT
+      const derivedPixel = (receivedPixelX === null || receivedPixelY === null)
+        && gameX !== null
+        && gameY !== null
+        ? gameToMapPixel({ x: gameX, y: gameY })
+        : null
+      const pixelX = receivedPixelX ?? derivedPixel?.pixelX ?? null
+      const pixelY = receivedPixelY ?? derivedPixel?.pixelY ?? null
       const currentState = getCurrentNavigationState()
       scheduleNavigationRender({
-        position: Number.isFinite(pixelX) && Number.isFinite(pixelY)
+        position: pixelX !== null && pixelY !== null
           ? {
               pixelX,
               pixelY,
-              sourceWidth: Number.isFinite(sourceWidth) && sourceWidth > 0 ? sourceWidth : MAP_WIDTH,
-              sourceHeight: Number.isFinite(sourceHeight) && sourceHeight > 0 ? sourceHeight : MAP_HEIGHT,
+              sourceWidth: derivedPixel ? MAP_LOCATOR_SOURCE_WIDTH : sourceWidth,
+              sourceHeight: derivedPixel ? MAP_LOCATOR_SOURCE_HEIGHT : sourceHeight,
             }
           : null,
         gamePosition: gameX !== null && gameY !== null

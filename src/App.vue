@@ -136,6 +136,11 @@ const navigationGameCoordinates = computed(() => {
   }
 })
 
+const hudGameCoordinates = computed(() => navigationGameCoordinates.value || {
+  x: coordinates.value.x,
+  y: coordinates.value.y,
+})
+
 const announcementPanelOpen = ref(true)
 
 const normalizeAnnouncementUrl = (value) => {
@@ -870,18 +875,12 @@ onBeforeUnmount(() => {
       <button type="button" :class="{ 'map-hud-button--active': isPictureInPictureOpen }" @click="toggleDocumentPictureInPicture">
         {{ pictureInPictureButtonLabel }}
       </button>
-      <span class="mouse-coordinate">
-        鼠标
-        X {{ coordinates.x.toFixed(0) }}
-        Y {{ coordinates.y.toFixed(0) }}
+      <span class="game-coordinate">
+        XYZ
+        {{ hudGameCoordinates.x.toFixed(0) }},
+        {{ hudGameCoordinates.y.toFixed(0) }},
+        {{ Number.isFinite(hudGameCoordinates.z) ? hudGameCoordinates.z.toFixed(0) : '--' }}
       </span>
-      <span v-if="navigationGameCoordinates" class="character-coordinate">
-        角色
-        X {{ navigationGameCoordinates.x.toFixed(0) }}
-        Y {{ navigationGameCoordinates.y.toFixed(0) }}
-        <template v-if="Number.isFinite(navigationGameCoordinates.z)">Z {{ navigationGameCoordinates.z.toFixed(0) }}</template>
-      </span>
-      <span v-if="navigationState.angle !== null" class="character-angle">角度 {{ navigationState.angle.toFixed(1) }}°</span>
       <span class="navigation-status" :class="`navigation-status--${navigationConnectionStatus}`">NAVI {{ navigationConnectionLabel }}</span>
       <span v-if="pictureInPictureError" class="map-hud-error">{{ pictureInPictureError }}</span>
     </div>

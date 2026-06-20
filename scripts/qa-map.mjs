@@ -7,7 +7,7 @@ import { chromium } from 'playwright-core'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const output = path.join(root, 'output', 'playwright')
-const port = 4174
+const port = Number(process.env.MAANTE_QA_PORT) || 4174
 const baseUrl = `http://127.0.0.1:${port}`
 const chromePath = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
 const vitePath = path.join(root, 'node_modules', 'vite', 'bin', 'vite.js')
@@ -110,7 +110,6 @@ try {
       position: {
         pixelX: 5788,
         pixelY: 8902,
-        z: 321.5,
         score: 0.82,
         mode: 'local',
         sourceWidth: 11264,
@@ -135,9 +134,28 @@ try {
       sourceHeight: 11264,
     })
   }), [-17804, 11576])
-  assert.match(await page.locator('.map-hud .mouse-coordinate').innerText(), /^鼠标 X -?\d+ Y -?\d+$/)
-  assert.match(await page.locator('.map-hud .character-coordinate').innerText(), /^角色 X -?\d+ Y -?\d+ Z 322$/)
-  assert.equal(await page.locator('.map-hud .character-angle').innerText(), '角度 123.4°')
+  assert.match(await page.locator('.map-hud .game-coordinate').innerText(), /^XYZ -?\d+, -?\d+, --$/)
+  await page.evaluate(() => {
+    window.__qaNavigationSocket.receive({
+      type: 'navi-state',
+      version: 1,
+      position: {
+        x: -134394.56,
+        y: 199913.53,
+        z: 11416.17,
+        pixelX: 4090,
+        pixelY: 6750,
+        sourceWidth: 11264,
+        sourceHeight: 11264,
+      },
+      angle: 123.4,
+    })
+  })
+  await page.waitForFunction(() => document.querySelector('.game-coordinate')?.textContent.includes('-134395'))
+  assert.equal(
+    (await page.locator('.map-hud .game-coordinate').innerText()).replace(/\s+/g, ' '),
+    'XYZ -134395, 199914, 11416',
+  )
   assert.equal(await page.locator('.map-hud .navigation-status').innerText(), 'NAVI CONNECTED')
   assert.equal(await page.locator('.map-hud').getByText(/^ML |^POS |^ANGLE /).count(), 0)
   const categoryListBox = await page.locator('.category-list').boundingBox()
