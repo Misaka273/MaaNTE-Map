@@ -534,9 +534,8 @@ export function useMapApp() {
   }
 
   function categoryIconHtml(category) {
-    return category?.iconUrl
-      ? `<img src="${publicAssetUrl(category.iconUrl)}" alt="" />`
-      : category?.icon || '·'
+    const src = category?.iconUrl || (category?.icon?.startsWith('/') ? category.icon : null)
+    return src ? `<img src="${publicAssetUrl(src)}" alt="" />` : category?.icon || '·'
   }
 
   function markerHtml(location) {

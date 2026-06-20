@@ -241,8 +241,10 @@ const getPrimaryCategory = (location) => {
   return categoryLookup.value[activeType || visibleTypes[0]]
 }
 
-const categoryIconHtml = (category) =>
-  category?.iconUrl ? `<img src="${publicAssetUrl(category.iconUrl)}" alt="" />` : category?.icon || '·'
+const categoryIconHtml = (category) => {
+  const src = category?.iconUrl || (category?.icon?.startsWith('/') ? category.icon : null)
+  return src ? `<img src="${publicAssetUrl(src)}" alt="" />` : category?.icon || '·'
+}
 
 const createPictureInPictureMarkerIcon = (location) => {
   const category = getPrimaryCategory(location)
@@ -653,7 +655,7 @@ onBeforeUnmount(() => {
                   <button v-for="category in group.categories" :key="category.id" class="category-button"
                     :class="{ 'category-button--muted': !activeCategories.has(category.id) }" type="button" @click="toggleCategory(category.id)">
                     <span class="category-icon" :style="{ '--category-color': category.color }">
-                      <img v-if="category.iconUrl" :src="publicAssetUrl(category.iconUrl)" alt="" />
+                      <img v-if="category.iconUrl || category.icon?.startsWith('/')" :src="publicAssetUrl(category.iconUrl || category.icon)" alt="" />
                       <template v-else>{{ category.icon }}</template>
                     </span>
                     <span>{{ category.label }}</span><small>{{ visibleCounts[category.id] }}</small>
