@@ -90,22 +90,24 @@ npm run clean:locations
 
 ## 坐标与扩图
 
-点位持久化为游戏世界坐标。渲染时使用固定变换：
+点位和路线持久化为游戏真实坐标 `x/y`。渲染时使用
+`src/data/navi-coordinate-calibration.json` 中的标定点解出二维仿射变换：
 
 ```text
-pixelX = worldOriginPixel.x + lng * pixelsPerWorldUnit
-pixelY = worldOriginPixel.y - lat * pixelsPerWorldUnit
+[pixelX, pixelY] = affine([gameX, gameY])
 ```
 
-当前配置为 `44 px / 世界坐标单位`，世界原点位于像素 `(11264, 11264)`。
+仿射变换同时处理平移、缩放、轻微旋转和剪切。定位服务和路线下发仍使用
+`11264 × 11264` 的 MapLocator 像素坐标；Leaflet 坐标仅用于页面内部渲染。
 
-扩图时不要按新图片尺寸重新缩放已有点位：
+坐标转换关系如下：
 
-- 向右或向下追加 `512 × 512` 瓦片：只更新 `map.width` 或 `map.height`。
-- 向左追加瓦片：增加 `map.worldOriginPixel.x`。
-- 向上追加瓦片：增加 `map.worldOriginPixel.y`。
+```text
+游戏真实坐标 ⇄ 标定像素坐标 ⇄ Leaflet CRS.Simple 坐标
+```
 
-这样旧点位不会因为底图尺寸变化而漂移。
+更新标定文件后，点位、路线、鼠标坐标和 WebSocket 路径点会统一使用新的变换。
+扩图时仍只需要更新底图尺寸和瓦片；不要修改已有真实坐标。
 
 ## 验证
 

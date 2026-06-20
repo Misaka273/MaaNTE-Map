@@ -32,12 +32,18 @@ VITE_MAANTE_NAVI_WEBSOCKET_URL=ws://127.0.0.1:14514
 - `sourceWidth` 和 `sourceHeight` 表示坐标所基于的图片尺寸。
 - 地图站当前发送路线时使用 `11264 × 11264` 定位坐标系。
 
+地图站内部的点位和路线使用游戏真实 `X/Y` 坐标保存。发送路线前，地图站根据
+`src/data/navi-coordinate-calibration.json` 中的标定点计算二维仿射变换，将真实坐标
+转换为本协议使用的像素坐标。该变换可同时处理平移、缩放、轻微旋转和剪切。
+
 服务端发送定位状态时，建议始终携带坐标系尺寸。地图站会按以下方式换算到当前底图：
 
 ```text
 mapX = pixelX × mapWidth / sourceWidth
 mapY = pixelY × mapHeight / sourceHeight
 ```
+
+WebSocket 接口本身不传输游戏真实坐标；服务端只需遵守本节定义的像素坐标系。
 
 ## 3. 消息一览
 

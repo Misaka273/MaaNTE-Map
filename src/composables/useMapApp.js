@@ -8,10 +8,12 @@ import {
   MAP_LOCATOR_SOURCE_WIDTH,
   MAP_WIDTH,
   TILE_SIZE,
+  gameToMapLatLng,
+  gameToMapPixel,
+  legacyWorldToGame,
   mapLatLngToMapLocator,
+  mapLatLngToGame,
   mapPixelToMapLatLng,
-  mapLatLngToWorld,
-  worldToMapLatLng,
 } from '../data/locations'
 import {
   COLLAPSIBLE_CATEGORY_GROUP_LABELS,
@@ -122,7 +124,7 @@ export function useMapApp() {
   const navigationProtocol = ref(normalizeNavigationProtocol(storedMarkerFilters?.navigationProtocol || defaultNavigationEndpoint.protocol))
   const navigationHost = ref(normalizeNavigationHost(storedMarkerFilters?.navigationHost || defaultNavigationEndpoint.host))
   const navigationPort = ref(normalizeNavigationPort(storedMarkerFilters?.navigationPort || defaultNavigationEndpoint.port))
-  const coordinates = ref({ pixelX: 0, pixelY: 0 })
+  const coordinates = ref({ pixelX: 0, pixelY: 0, x: 0, y: 0 })
   const mapView = ref(null)
   const sidebarCollapsed = ref(false)
   const districtFilterOpen = ref(storedMarkerFilters?.districtFilterOpen === true)
@@ -145,6 +147,7 @@ export function useMapApp() {
   const navigationConnection = ref('disconnected')
   const navigationState = ref({
     position: null,
+    gamePosition: null,
     angle: null,
     angleConfidence: 0,
     route: null,
@@ -168,8 +171,8 @@ export function useMapApp() {
     name: '',
     types: [],
     district: '全地图',
-    lat: 0,
-    lng: 0,
+    x: 0,
+    y: 0,
     description: '',
     tagsText: '',
     customTypeId: '',
@@ -422,6 +425,26 @@ export function useMapApp() {
     }
   }
 
+  function normalizeLocationCoordinates(location) {
+    if (!location || typeof location !== 'object') return null
+    let x = Number(location.x)
+    let y = Number(location.y)
+    if ((!Number.isFinite(x) || !Number.isFinite(y))
+      && Number.isFinite(Number(location.lat))
+      && Number.isFinite(Number(location.lng))) {
+      ;({ x, y } = legacyWorldToGame(location))
+    }
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null
+    const normalized = {
+      ...location,
+      x: Number(x.toFixed(3)),
+      y: Number(y.toFixed(3)),
+    }
+    delete normalized.lat
+    delete normalized.lng
+    return normalized
+  }
+
   function normalizeCategoryGroup(category) {
     return String(category?.group || category?.groupLabel || '自定义')
   }
@@ -584,7 +607,7 @@ export function useMapApp() {
     selectedLocation.value = location
     renderMarkers()
     if (fly && map) {
-      map.flyTo(worldToMapLatLng(location), Math.max(map.getZoom(), -2), { duration: 0.45 })
+      map.flyTo(gameToMapLatLng(location), Math.max(map.getZoom(), -2), { duration: 0.45 })
     }
   }
 
@@ -594,8 +617,8 @@ export function useMapApp() {
     if (!location || segmentPoints.value.at(-1)?.locationId === locationId) return
     segmentPoints.value = [...segmentPoints.value, {
       locationId,
-      lat: location.lat,
-      lng: location.lng,
+      x: location.x,
+      y: location.y,
     }]
     renderRouteArrows()
   }
@@ -603,10 +626,10 @@ export function useMapApp() {
   function addRouteCoordinate(point) {
     if (!isAddingSegment.value) return
     const previous = segmentPoints.value.at(-1)
-    if (previous && previous.lat === point.lat && previous.lng === point.lng) return
+    if (previous && previous.x === point.x && previous.y === point.y) return
     segmentPoints.value = [...segmentPoints.value, {
-      lat: Number(point.lat.toFixed(6)),
-      lng: Number(point.lng.toFixed(6)),
+      x: Number(point.x.toFixed(3)),
+      y: Number(point.y.toFixed(3)),
     }]
     renderRouteArrows()
   }
@@ -616,7 +639,7 @@ export function useMapApp() {
     markerLayer.clearLayers()
     markerLookup.clear()
     filteredLocations.value.forEach((location) => {
-      const marker = L.marker(worldToMapLatLng(location), {
+      const marker = L.marker(gameToMapLatLng(location), {
         icon: createIcon(location),
         title: location.name,
         riseOnHover: true,
@@ -631,8 +654,8 @@ export function useMapApp() {
 
   // 路线绘制：把路线点转换成 Leaflet 图层和方向箭头。
   function drawArrow(from, to, color, temporary = false) {
-    const start = worldToMapLatLng(from)
-    const end = worldToMapLatLng(to)
+    const start = gameToMapLatLng(from)
+    const end = gameToMapLatLng(to)
     L.polyline([start, end], {
       color,
       weight: 3,
@@ -655,17 +678,22 @@ export function useMapApp() {
   function normalizeRoutePoint(point) {
     if (typeof point === 'string') {
       const location = locationLookup.value[point]
-      return location ? { locationId: point, lat: location.lat, lng: location.lng } : null
+      return location ? { locationId: point, x: location.x, y: location.y } : null
     }
     if (!point || typeof point !== 'object') return null
     const location = point.locationId ? locationLookup.value[point.locationId] : null
-    const lat = Number(location?.lat ?? point.lat)
-    const lng = Number(location?.lng ?? point.lng)
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null
+    let x = Number(location?.x ?? point.x)
+    let y = Number(location?.y ?? point.y)
+    if ((!Number.isFinite(x) || !Number.isFinite(y))
+      && Number.isFinite(Number(point.lat))
+      && Number.isFinite(Number(point.lng))) {
+      ;({ x, y } = legacyWorldToGame(point))
+    }
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null
     return {
       ...(point.locationId ? { locationId: String(point.locationId) } : {}),
-      lat,
-      lng,
+      x,
+      y,
     }
   }
 
@@ -679,14 +707,14 @@ export function useMapApp() {
     if (!normalized) return `#${index + 1}`
     const location = normalized.locationId ? locationLookup.value[normalized.locationId] : null
     if (location) return `${index + 1}. ${location.name}`
-    return `${index + 1}. ${normalized.lat.toFixed(2)}, ${normalized.lng.toFixed(2)}`
+    return `${index + 1}. ${normalized.x.toFixed(2)}, ${normalized.y.toFixed(2)}`
   }
 
   function updateSegmentPoint(index, latlng) {
-    const point = mapLatLngToWorld(latlng)
+    const point = mapLatLngToGame(latlng)
     segmentPoints.value = segmentPoints.value.map((item, pointIndex) => (
       pointIndex === index
-        ? { lat: Number(point.lat.toFixed(6)), lng: Number(point.lng.toFixed(6)) }
+        ? { x: Number(point.x.toFixed(3)), y: Number(point.y.toFixed(3)) }
         : item
     ))
   }
@@ -723,7 +751,7 @@ export function useMapApp() {
   }
 
   function drawEditableRoutePoint(point, index, color) {
-    const marker = L.marker(worldToMapLatLng(point), {
+    const marker = L.marker(gameToMapLatLng(point), {
       draggable: true,
       title: getRoutePointLabel(point, index),
       icon: L.divIcon({
@@ -751,7 +779,7 @@ export function useMapApp() {
       if (temporary) {
         drawEditableRoutePoint(point, index, color)
       } else {
-        L.circleMarker(worldToMapLatLng(point), {
+        L.circleMarker(gameToMapLatLng(point), {
           className: 'route-point',
           color,
           fillColor: color,
@@ -791,8 +819,7 @@ export function useMapApp() {
   function routePointToNavigationWaypoint(point) {
     const normalized = normalizeRoutePoint(point)
     if (!normalized) return null
-    const [lat, lng] = worldToMapLatLng(normalized)
-    const locatorPoint = mapLatLngToMapLocator({ lat, lng })
+    const locatorPoint = gameToMapPixel(normalized)
     return {
       pixelX: Number(locatorPoint.pixelX.toFixed(3)),
       pixelY: Number(locatorPoint.pixelY.toFixed(3)),
@@ -1042,6 +1069,7 @@ export function useMapApp() {
     navigationAngleMissing = null
     navigationState.value = {
       position: null,
+      gamePosition: null,
       angle: null,
       angleConfidence: 0,
       route: null,
@@ -1075,6 +1103,18 @@ export function useMapApp() {
       const sourceWidth = Number(payload.position?.sourceWidth)
       const sourceHeight = Number(payload.position?.sourceHeight)
       const angle = Number(payload.angle)
+      const gamePositionPayload = payload.gamePosition || payload.position?.gamePosition || {}
+      const readCoordinate = (...values) => {
+        for (const value of values) {
+          if (value === null || value === undefined || value === '') continue
+          const number = Number(value)
+          if (Number.isFinite(number)) return number
+        }
+        return null
+      }
+      const gameX = readCoordinate(payload.position?.x, payload.position?.gameX, gamePositionPayload.x, payload.x)
+      const gameY = readCoordinate(payload.position?.y, payload.position?.gameY, gamePositionPayload.y, payload.y)
+      const gameZ = readCoordinate(payload.position?.z, payload.position?.gameZ, gamePositionPayload.z, payload.z)
       const currentState = getCurrentNavigationState()
       scheduleNavigationRender({
         position: Number.isFinite(pixelX) && Number.isFinite(pixelY)
@@ -1085,6 +1125,9 @@ export function useMapApp() {
               sourceHeight: Number.isFinite(sourceHeight) && sourceHeight > 0 ? sourceHeight : MAP_HEIGHT,
             }
           : null,
+        gamePosition: gameX !== null && gameY !== null
+          ? { x: gameX, y: gameY, ...(gameZ !== null ? { z: gameZ } : {}) }
+          : gameZ !== null ? { z: gameZ } : null,
         angle: payload.angle !== null && Number.isFinite(angle) ? angle : null,
         angleConfidence: Number(payload.angleConfidence) || 0,
         route: payload.route || currentState.route || null,
@@ -1148,17 +1191,17 @@ export function useMapApp() {
 
   function focusSegment(segment) {
     if (!map) return
-    const points = getSegmentPoints(segment).map(worldToMapLatLng)
+    const points = getSegmentPoints(segment).map(gameToMapLatLng)
     if (points.length) map.flyToBounds(L.latLngBounds(points), { padding: [80, 80], duration: 0.45 })
   }
 
   function fitLocationsBounds(targetLocations) {
     if (!map || !targetLocations.length) return
     if (targetLocations.length === 1) {
-      map.flyTo(worldToMapLatLng(targetLocations[0]), -1, { duration: 0.45 })
+      map.flyTo(gameToMapLatLng(targetLocations[0]), -1, { duration: 0.45 })
       return
     }
-    const points = targetLocations.map(worldToMapLatLng)
+    const points = targetLocations.map(gameToMapLatLng)
     map.flyToBounds(L.latLngBounds(points).pad(0.1), { duration: 0.45 })
   }
 
@@ -1267,7 +1310,7 @@ export function useMapApp() {
       route.segments.forEach((segment) => {
         segment.points = getSegmentPoints(segment).map((point) => (
           point.locationId && deletedIds.has(point.locationId)
-            ? { lat: point.lat, lng: point.lng }
+            ? { x: point.x, y: point.y }
             : point
         ))
         delete segment.markerIds
@@ -1286,7 +1329,10 @@ export function useMapApp() {
           }))
       : []
     const upsertLocations = Array.isArray(payload.upsertLocations)
-      ? payload.upsertLocations.filter((location) => location && typeof location === 'object' && typeof location.id === 'string')
+      ? payload.upsertLocations
+          .filter((location) => location && typeof location === 'object' && typeof location.id === 'string')
+          .map(normalizeLocationCoordinates)
+          .filter(Boolean)
       : []
     const deletedLocationIds = Array.isArray(payload.deletedLocationIds)
       ? payload.deletedLocationIds.filter((id) => typeof id === 'string' && id)
@@ -1421,7 +1467,7 @@ export function useMapApp() {
 
   function copyCoordinates() {
     if (!selectedLocation.value) return
-    navigator.clipboard?.writeText(`${selectedLocation.value.lat.toFixed(6)}, ${selectedLocation.value.lng.toFixed(6)}`)
+    navigator.clipboard?.writeText(`${selectedLocation.value.x.toFixed(3)}, ${selectedLocation.value.y.toFixed(3)}`)
     showStatus('坐标已复制')
   }
 
@@ -1499,8 +1545,8 @@ export function useMapApp() {
       name: form.name.trim(),
       types: [...form.types],
       district: districtOptions.value.includes(form.district) ? form.district : '全地图',
-      lat: Number(form.lat),
-      lng: Number(form.lng),
+      x: Number(form.x),
+      y: Number(form.y),
       description: form.description.trim(),
       tags: form.tagsText.split(',').map((tag) => tag.trim()).filter(Boolean),
       images: [...form.images],
@@ -1745,6 +1791,8 @@ export function useMapApp() {
 
   onMounted(async () => {
     await loadLatestMapData()
+    mapData.value.locations = locations.value.map(normalizeLocationCoordinates).filter(Boolean)
+    mapData.value.routes = normalizeRoutes(routes.value)
     const storedRoutes = readStoredRoutes()
     if (storedRoutes) mapData.value.routes = normalizeRoutes(storedRoutes)
     restoreMarkerFilters()
@@ -1768,11 +1816,16 @@ export function useMapApp() {
     L.control.zoom({ position: 'bottomright' }).addTo(map)
     markerLayer = createMarkerLayer().addTo(map)
     arrowLayer = L.layerGroup().addTo(map)
-    map.on('mousemove', ({ latlng }) => { coordinates.value = mapLatLngToMapLocator(latlng) })
+    map.on('mousemove', ({ latlng }) => {
+      coordinates.value = {
+        ...mapLatLngToMapLocator(latlng),
+        ...mapLatLngToGame(latlng),
+      }
+    })
     map.on('click', ({ latlng }) => {
       selectedLocation.value = null
-      if (isAddingSegment.value) addRouteCoordinate(mapLatLngToWorld(latlng))
-      else if (editorMode.value) openCreateLocation(mapLatLngToWorld(latlng))
+      if (isAddingSegment.value) addRouteCoordinate(mapLatLngToGame(latlng))
+      else if (editorMode.value) openCreateLocation(mapLatLngToGame(latlng))
       renderMarkers()
     })
     map.on('moveend zoomend', () => {

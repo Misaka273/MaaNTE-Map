@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import L from 'leaflet'
 import { useMapApp } from './composables/useMapApp'
-import { MAP_HEIGHT, MAP_WIDTH, TILE_SIZE, mapPixelToMapLatLng, worldToMapLatLng } from './data/locations'
+import { MAP_HEIGHT, MAP_WIDTH, TILE_SIZE, gameToMapLatLng, mapPixelToGame, mapPixelToMapLatLng } from './data/locations'
 import { INITIAL_ZOOM, MIN_ZOOM } from './constants/mapApp'
 import announcement from './data/announcements.json'
 
@@ -120,6 +120,21 @@ const {
   visibleCounts,
   visibleLocationIds,
 } = useMapApp()
+
+const navigationGameCoordinates = computed(() => {
+  const explicitPosition = navigationState.value.gamePosition
+  if (Number.isFinite(explicitPosition?.x) && Number.isFinite(explicitPosition?.y)) {
+    return explicitPosition
+  }
+
+  const pixelPosition = navigationState.value.position
+  if (!pixelPosition) return null
+
+  return {
+    ...mapPixelToGame(pixelPosition),
+    ...(Number.isFinite(explicitPosition?.z) ? { z: explicitPosition.z } : {}),
+  }
+})
 
 const announcementPanelOpen = ref(true)
 
@@ -314,7 +329,7 @@ const renderPictureInPictureMarkers = () => {
   if (!pictureInPictureMap || !pictureInPictureMarkerLayer) return
   pictureInPictureMarkerLayer.clearLayers()
   filteredLocations.value.forEach((location) => {
-    L.marker(worldToMapLatLng(location), {
+    L.marker(gameToMapLatLng(location), {
       icon: createPictureInPictureMarkerIcon(location),
       title: location.name,
       interactive: false,
@@ -834,7 +849,7 @@ onBeforeUnmount(() => {
         <span v-for="tag in selectedLocation.tags" :key="tag"># {{ tag }}</span>
       </div>
       <button class="coordinate-row" type="button" @click="copyCoordinates">
-        <span>坐标</span><code>{{ selectedLocation.lat.toFixed(6) }}, {{ selectedLocation.lng.toFixed(6) }}</code><small>复制</small>
+        <span>游戏坐标</span><code>{{ selectedLocation.x.toFixed(3) }}, {{ selectedLocation.y.toFixed(3) }}</code><small>复制</small>
       </button>
       <div v-if="editorMode" class="detail-actions">
         <button type="button" @click="openEditLocation(selectedLocation)">编辑</button>
@@ -855,10 +870,19 @@ onBeforeUnmount(() => {
       <button type="button" :class="{ 'map-hud-button--active': isPictureInPictureOpen }" @click="toggleDocumentPictureInPicture">
         {{ pictureInPictureButtonLabel }}
       </button>
-      <span>ML X {{ coordinates.pixelX.toFixed(0) }}</span><span>ML Y {{ coordinates.pixelY.toFixed(0) }}</span>
+      <span class="mouse-coordinate">
+        鼠标
+        X {{ coordinates.x.toFixed(0) }}
+        Y {{ coordinates.y.toFixed(0) }}
+      </span>
+      <span v-if="navigationGameCoordinates" class="character-coordinate">
+        角色
+        X {{ navigationGameCoordinates.x.toFixed(0) }}
+        Y {{ navigationGameCoordinates.y.toFixed(0) }}
+        <template v-if="Number.isFinite(navigationGameCoordinates.z)">Z {{ navigationGameCoordinates.z.toFixed(0) }}</template>
+      </span>
+      <span v-if="navigationState.angle !== null" class="character-angle">角度 {{ navigationState.angle.toFixed(1) }}°</span>
       <span class="navigation-status" :class="`navigation-status--${navigationConnectionStatus}`">NAVI {{ navigationConnectionLabel }}</span>
-      <span v-if="navigationState.position">POS {{ navigationState.position.pixelX.toFixed(0) }}, {{ navigationState.position.pixelY.toFixed(0) }}</span>
-      <span v-if="navigationState.angle !== null">ANGLE {{ navigationState.angle.toFixed(1) }}°</span>
       <span v-if="pictureInPictureError" class="map-hud-error">{{ pictureInPictureError }}</span>
     </div>
     <div v-if="editorMode" class="editor-tip glass-panel">编辑模式：点击地图空白处添加点位</div>
@@ -872,7 +896,7 @@ onBeforeUnmount(() => {
         <label>区域<select v-model="locationForm.district">
           <option v-for="district in districtOptions" :key="district" :value="district">{{ district }}</option>
         </select></label>
-        <div class="form-grid"><label>LAT<input v-model.number="locationForm.lat" type="number" step="any" /></label><label>LNG<input v-model.number="locationForm.lng" type="number" step="any" /></label></div>
+        <div class="form-grid"><label>游戏 X<input v-model.number="locationForm.x" type="number" step="any" /></label><label>游戏 Y<input v-model.number="locationForm.y" type="number" step="any" /></label></div>
         <label>描述<textarea v-model="locationForm.description" rows="3" /></label>
         <label>搜索关键词（可选）<input v-model="locationForm.tagsText" placeholder="使用英文逗号分隔，用于辅助搜索" /></label>
         <fieldset><legend>类型（可多选）</legend><div class="type-picker">

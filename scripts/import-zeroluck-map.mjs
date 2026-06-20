@@ -8,8 +8,10 @@ const DEFAULT_TERMS_FILE = path.resolve('src/data/import-terms/nte-map-terms.jso
 const DEFAULT_ASSETS_DIR = path.resolve('public/icons/imported/nte')
 const DEFAULT_ASSETS_PUBLIC_PATH = '/icons/imported/nte'
 const DEFAULT_GROUP = '导入点位'
-const POSITION_SCALE = 22
-const DUPLICATE_DISTANCE = 1.25
+const DUPLICATE_DISTANCE = 1700
+const coordinateCalibration = JSON.parse(
+  await fs.readFile(path.resolve('src/data/navi-coordinate-calibration.json'), 'utf8'),
+)
 
 const CATEGORY_COLORS = [
   '#8adfd6',
@@ -268,27 +270,64 @@ function createTermStore(existingTermsPayload) {
   }
 }
 
+function solveAffine(index) {
+  const [first, second, third] = coordinateCalibration.points
+  const [x1, y1] = first.raw
+  const [x2, y2] = second.raw
+  const [x3, y3] = third.raw
+  const determinant = x1 * (y2 - y3) + x2 * (y3 - y1) + x3 * (y1 - y2)
+  const value1 = first.map[index]
+  const value2 = second.map[index]
+  const value3 = third.map[index]
+  return {
+    x: (value1 * (y2 - y3) + value2 * (y3 - y1) + value3 * (y1 - y2)) / determinant,
+    y: (value1 * (x3 - x2) + value2 * (x1 - x3) + value3 * (x2 - x1)) / determinant,
+    offset: (
+      value1 * (x2 * y3 - x3 * y2)
+      + value2 * (x3 * y1 - x1 * y3)
+      + value3 * (x1 * y2 - x2 * y1)
+    ) / determinant,
+  }
+}
+
+const affineMapX = solveAffine(0)
+const affineMapY = solveAffine(1)
+const affineDeterminant = affineMapX.x * affineMapY.y - affineMapX.y * affineMapY.x
+
+function mapPixelToGame(pixelX, pixelY) {
+  const shiftedX = pixelX - affineMapX.offset
+  const shiftedY = pixelY - affineMapY.offset
+  return {
+    x: (shiftedX * affineMapY.y - affineMapX.y * shiftedY) / affineDeterminant,
+    y: (affineMapX.x * shiftedY - shiftedX * affineMapY.x) / affineDeterminant,
+  }
+}
+
 function localPosition(marker) {
   const x = Number(marker?.position?.map?.x)
   const y = Number(marker?.position?.map?.y)
   if (!Number.isFinite(x) || !Number.isFinite(y)) return null
 
+  const position = mapPixelToGame(
+    coordinateCalibration.sourceWidth / 2 + x,
+    coordinateCalibration.sourceHeight / 2 - y,
+  )
   return {
-    lat: Number((y / POSITION_SCALE).toFixed(6)),
-    lng: Number((x / POSITION_SCALE).toFixed(6)),
+    x: Number(position.x.toFixed(3)),
+    y: Number(position.y.toFixed(3)),
   }
 }
 
 function createDuplicateLookup(locations) {
   const byType = new Map()
   for (const location of locations) {
-    const lat = Number(location.lat)
-    const lng = Number(location.lng)
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue
+    const x = Number(location.x)
+    const y = Number(location.y)
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue
 
     for (const type of location.types || []) {
       if (!byType.has(type)) byType.set(type, [])
-      byType.get(type).push({ lat, lng })
+      byType.get(type).push({ x, y })
     }
   }
 
@@ -301,7 +340,7 @@ function isDuplicate(position, categoryId, duplicateLookup) {
 
   for (const type of candidateTypes) {
     for (const existing of duplicateLookup.get(type) || []) {
-      const distance = Math.hypot(existing.lat - position.lat, existing.lng - position.lng)
+      const distance = Math.hypot(existing.x - position.x, existing.y - position.y)
       if (distance <= DUPLICATE_DISTANCE) return true
     }
   }
