@@ -116,11 +116,13 @@ npm run qa
 
 ## MaaNTE 实时定位
 
-页面会自动连接 `ws://127.0.0.1:8765`，接收 MaaNTE 的 Navi 定位状态，并在地图上展示玩家位置箭头、像素坐标和朝向角度。
+页面默认连接 `ws://127.0.0.1:14514`，接收 MaaNTE 的 Navi 定位状态，并在地图上展示玩家位置箭头、像素坐标和朝向角度。
 
 在 MaaNTE 中运行 `MapLocator.json` 提供的 `NaviWebSocket` 节点即可同时启动 NCC 定位、方向预测和本地广播。
 
 需要使用其他地址时，在构建前设置 `VITE_MAANTE_NAVI_WEBSOCKET_URL`。消息格式如下：
+
+完整的双向消息、路线控制和错误响应定义见 [地图站 WebSocket 接口文档](docs/websocket-api.md)。
 
 ```json
 {
