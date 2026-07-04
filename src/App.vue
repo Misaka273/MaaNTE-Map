@@ -78,6 +78,8 @@ const {
   navigationPort,
   navigationRouteSendEnabled,
   navigationState,
+  navigationWildcardHostWarning,
+  navigationWildcardHostWarningMessage,
   navigationWebSocketUrl,
   openEditLocation,
   pendingLocationChangeCount,
@@ -557,10 +559,16 @@ onBeforeUnmount(() => {
         <div class="brand-copy">
           <p class="eyebrow">MaaNTE Map</p>
           <div class="brand-title-row">
-            <h1>MaaNTE在线地图工具</h1>
-            <a class="brand-map-link" href="https://pph.maante.org/" target="_blank" rel="noopener noreferrer">
-              前往粉爪大劫案在线地图
-            </a>
+            <details class="brand-map-menu">
+              <summary>
+                <h1>MaaNTE在线地图工具</h1>
+                <span class="brand-map-menu__hint">前往其它地图站</span>
+              </summary>
+              <div class="brand-map-menu__panel">
+                <a href="https://pph.maante.org/" target="_blank" rel="noopener noreferrer">粉爪大劫案在线地图</a>
+                <a href="https://999.maante.org/" target="_blank" rel="noopener noreferrer">九百九十九夜在线地图</a>
+              </div>
+            </details>
           </div>
         </div>
       </div>
@@ -755,7 +763,14 @@ onBeforeUnmount(() => {
             <div class="navigation-endpoint-fields">
               <label>
                 <span>IP</span>
-                <input v-model.trim="navigationHost" type="text" inputmode="url" autocomplete="off" @change="applyNavigationEndpoint" />
+                <input
+                  v-model.trim="navigationHost"
+                  type="text"
+                  inputmode="url"
+                  autocomplete="off"
+                  :class="{ 'is-danger': navigationWildcardHostWarning }"
+                  @change="applyNavigationEndpoint"
+                />
               </label>
               <label>
                 <span>端口</span>
@@ -898,6 +913,11 @@ onBeforeUnmount(() => {
     </div>
     <div v-if="editorMode" class="editor-tip glass-panel">编辑模式：点击地图空白处添加点位</div>
     <div v-if="statusMessage" class="status-toast glass-panel">{{ statusMessage }}</div>
+    <div v-if="navigationWildcardHostWarning" class="navigation-wildcard-modal" role="alert" aria-live="assertive">
+      <div class="navigation-wildcard-modal__panel">
+        {{ navigationWildcardHostWarningMessage }}
+      </div>
+    </div>
 
     <div v-if="editorFormOpen" class="modal-backdrop" @click.self="editorFormOpen = false">
       <form class="editor-form glass-panel" @submit.prevent="saveLocation">
